@@ -580,18 +580,18 @@ function renderScanTab() {
     </div>
 
     <!-- AI SCANNER VIEWPORT -->
-    <div class="scan-viewport sv-${state}" id="scanViewport" style="height:${scanning?'310px':'280px'}">
+    <div class="scan-viewport sv-${state}${S.cameraActive?' cam-active':''}" id="scanViewport" style="height:${S.cameraActive?'390px':scanning?'310px':'280px'}">
       <div class="scan-vp-bg"></div>
       <div class="scan-ai-grid"></div>
-      <div class="scan-barcode-bg">${barcodeH}</div>
+      ${!S.cameraActive ? `<div class="scan-barcode-bg">${barcodeH}</div>` : ''}
       <div class="scan-laser-beam"></div>
       ${confRing}
 
       <!-- Live camera indicator -->
-      ${S.cameraActive ? `<div class="live-cam-indicator"><div class="live-cam-dot"></div>LIVE · กล้องจริง</div>` : ''}
+      ${S.cameraActive ? `<div class="live-cam-indicator"><div class="live-cam-dot"></div>LIVE · ZXing AI</div>` : ''}
 
       <!-- Camera video container -->
-      <div id="camContainer" style="position:absolute;inset:0;display:${S.cameraActive?'block':'flex'};flex-direction:column;align-items:center;justify-content:center;gap:8px;${S.cameraActive?'':''}">
+      <div id="camContainer" style="position:absolute;inset:0;display:${S.cameraActive?'block':'flex'};flex-direction:column;align-items:center;justify-content:center;gap:8px">
         ${!S.cameraActive ? `
           <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="rgba(0,158,158,.4)" stroke-width="1" style="margin-top:8px">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -601,7 +601,7 @@ function renderScanTab() {
       </div>
 
       <!-- Scan reticle + corners -->
-      <div class="scan-reticle" style="width:170px;height:148px">
+      <div class="scan-reticle" style="width:${S.cameraActive?'200px':'170px'};height:${S.cameraActive?'174px':'148px'}">
         ${corners}
         ${detected ? `<div class="scan-success-ring"></div><div class="scan-check">✓</div>` : ''}
         ${scanning ? '<div class="scan-laser-beam" style="position:relative;animation-duration:1.4s;inset:unset;box-shadow:none;width:100%;height:1px"></div>' : ''}
@@ -713,6 +713,13 @@ function renderScanResult(r) {
         <div class="scan-field-reveal"><div class="scan-field-label">จำนวน</div><div class="scan-field-val">${r.qty||'—'} หน่วย</div></div>
       </div>
 
+      ${r.gs1?.['01'] || r.barcode ? `<div class="gs1-raw-row" style="animation:typeReveal .3s .28s both">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9d8cff" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 4v5M12 4v5M17 4v5"/></svg>
+        ${r.gs1?.['01'] ? `<span class="gs1-gtin">GTIN·${r.gs1['01']}</span>` : ''}
+        ${r.barcode && !r.gs1?.['01'] ? `<span class="gs1-gtin" style="color:var(--ink3)">${r.barcode.slice(0,24)}${r.barcode.length>24?'…':''}</span>` : ''}
+        <span style="margin-left:auto;font-size:9.5px;color:#009E9E;font-weight:700;font-family:'JetBrains Mono',monospace">GS1 ✓</span>
+      </div>` : ''}
+
       <div class="scan-result-actions">
         <button class="scan-accept-btn" id="acceptScanBtn" ${isExpired?'style="opacity:.45;pointer-events:none"':''}>
           ✓ รับเข้าสต๊อก
@@ -794,6 +801,53 @@ function renderStockTab() {
       ${cardList(sub)}` : cardList(items)}`;
 }
 
+// ── DASH RING CHART ───────────────────────────────────
+function renderStatusRing(counts, total) {
+  if (!total) return '';
+  const keys   = ['RED','ORANGE','YELLOW','GREEN'];
+  const colors = ['#ff4d5e','#ff9f43','#ffd23f','#2ee6a6'];
+  const labels = ['หมดอายุ','คืนบริษัท','เฝ้าระวัง','ปลอดภัย'];
+  const r = 50, cx = 66, cy = 66;
+  const circ = 2 * Math.PI * r; // ≈314.16
+
+  let segs = '', cumLen = 0;
+  keys.forEach((k, i) => {
+    const cnt = counts[k] || 0;
+    if (!cnt) return;
+    const arcLen = (cnt / total) * circ;
+    segs += `<circle cx="${cx}" cy="${cy}" r="${r}"
+      fill="none" stroke="${colors[i]}" stroke-width="12"
+      stroke-dasharray="${arcLen.toFixed(1)} ${(circ-arcLen).toFixed(1)}"
+      stroke-dashoffset="${(-cumLen).toFixed(1)}"
+      transform="rotate(-90 ${cx} ${cy})"
+      style="transition:stroke-dasharray .8s cubic-bezier(.4,0,.2,1)"
+    />`;
+    cumLen += arcLen;
+  });
+
+  const legend = keys.map((k, i) => `
+    <div class="dash-legend-item">
+      <div class="dash-legend-dot" style="background:${colors[i]}"></div>
+      <div class="dash-legend-text">
+        <span>${labels[i]}</span>
+        <span style="color:${colors[i]};font-size:16px;font-weight:800;font-family:'Space Grotesk',sans-serif;margin-left:auto">${counts[k]||0}</span>
+      </div>
+    </div>`).join('');
+
+  return `
+    <div class="dash-ring-wrap">
+      <div style="flex-shrink:0">
+        <svg width="132" height="132" viewBox="0 0 132 132">
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="12"/>
+          ${segs}
+          <text x="${cx}" y="${cy-6}" text-anchor="middle" fill="var(--ink)" font-size="23" font-weight="800" font-family="Space Grotesk,sans-serif">${total}</text>
+          <text x="${cx}" y="${cy+11}" text-anchor="middle" fill="var(--ink3)" font-size="9.5" font-weight="600" font-family="Sarabun,sans-serif">รายการ</text>
+        </svg>
+      </div>
+      <div class="dash-ring-legend">${legend}</div>
+    </div>`;
+}
+
 // ── DASH TAB ──────────────────────────────────────────
 function renderDashTab() {
   const all = S.items;
@@ -834,19 +888,7 @@ function renderDashTab() {
     </div>`;
   }).join('') : `<div class="empty-state" style="margin-top:8px"><div class="empty-state-icon">✅</div>ยาทุกรายการปลอดภัย</div>`;
 
-  const total = all.length || 1;
-  const bars = [
-    { label:'หมดอายุ', count:counts.RED, color:'#ff4d5e' },
-    { label:'ส้ม', count:counts.ORANGE, color:'#ff9f43' },
-    { label:'เหลือง', count:counts.YELLOW, color:'#ffd23f' },
-    { label:'เขียว', count:counts.GREEN, color:'#2ee6a6' },
-  ];
-  const barHTML = bars.map(b => `
-    <div class="bar-row">
-      <div class="bar-label">${b.label}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(3,(b.count/total)*100)}%;background:${b.color}"></div></div>
-      <div class="bar-count">${b.count}</div>
-    </div>`).join('');
+  const total = all.length;
 
   return `
     <div class="kpi-grid">${kpiHTML}</div>
@@ -855,9 +897,9 @@ function renderDashTab() {
       <span class="dash-section-sub">${alerts.length} รายการ</span>
     </div>
     ${alertListHTML}
-    <div class="dash-section-title" style="margin-top:20px"><span>📊 สัดส่วนสถานะ</span></div>
-    <div style="padding:14px;border-radius:16px;background:var(--card);border:1px solid var(--line)">${barHTML}</div>
-    <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:12px;font-family:'JetBrains Mono',monospace">
+    <div class="dash-section-title" style="margin-top:20px"><span>📊 สัดส่วนสถานะยา</span></div>
+    ${renderStatusRing(counts, total)}
+    <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:14px;font-family:'JetBrains Mono',monospace">
       อัปเดต ${currentTime()} · ${new Date().toLocaleDateString('th-TH')}
     </div>`;
 }
@@ -1220,36 +1262,31 @@ function toggleVoice() {
 }
 
 function toggleCamera() {
-  if (S.cameraActive) {
-    stopCamera(); return;
-  }
+  if (S.cameraActive) { stopCamera(); return; }
   vibrate(8);
   if (!navigator.mediaDevices?.getUserMedia) {
     showToast('📵 เบราว์เซอร์นี้ไม่รองรับกล้อง', '#ff9f43'); return;
   }
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
-    .then(stream => {
-      S.cameraActive = true;
-      S.cameraStream = stream;
-      updateTabBody();
-      setTimeout(() => {
-        const container = document.getElementById('camContainer');
-        if (!container) return;
-        container.innerHTML = '';
-        const v = document.createElement('video');
-        v.autoplay = true; v.muted = true; v.playsInline = true;
-        v.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0';
-        v.srcObject = stream;
-        container.appendChild(v);
-        v.play().catch(()=>{});
-        startBarcodeDetection(v);
-      }, 100);
-      showToast('📷 เปิดกล้องสำเร็จ — เล็งที่บาร์โค้ด', '#2ee6a6');
-    })
-    .catch(() => showToast('📵 ไม่สามารถเปิดกล้องได้ — ลองแตะ "AI สแกน"', '#ff9f43'));
+  S.cameraActive = true;
+  updateTabBody();
+  setTimeout(() => {
+    const container = document.getElementById('camContainer');
+    if (!container) { S.cameraActive = false; updateTabBody(); return; }
+    container.innerHTML = '';
+    const v = document.createElement('video');
+    v.id = 'pc-scanvid'; v.autoplay = true; v.muted = true; v.playsInline = true;
+    v.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;border-radius:inherit';
+    container.appendChild(v);
+    startZXingScanner(v);
+  }, 150);
 }
 
 function stopCamera() {
+  if (_zxingReader) {
+    try { _zxingReader.reset(); } catch(e) {}
+    _zxingReader = null;
+  }
+  if (_barcodeLoop) { clearInterval(_barcodeLoop); _barcodeLoop = null; }
   if (S.cameraStream) {
     try { S.cameraStream.getTracks().forEach(t => t.stop()); } catch(e) {}
     S.cameraStream = null;
@@ -1261,36 +1298,71 @@ function stopCamera() {
 }
 
 let _barcodeLoop = null;
+let _zxingReader = null;
+
 function startBarcodeDetection(videoEl) {
-  if (!('BarcodeDetector' in window)) return;
+  if (!('BarcodeDetector' in window)) {
+    S.scanState = 'detecting'; updateScanViewport(); return;
+  }
   try {
-    const det = new BarcodeDetector({ formats: ['ean_13','qr_code','data_matrix','code_128','code_39'] });
+    const det = new BarcodeDetector({ formats: ['ean_13','qr_code','data_matrix','code_128','code_39','aztec','pdf_417'] });
     S.barcodeDetector = det;
     S.scanState = 'detecting'; updateScanViewport();
     _barcodeLoop = setInterval(async () => {
-      if (!S.cameraActive || S.scanState === 'detected') return;
+      if (!S.cameraActive || ['lockon','decoding','detected'].includes(S.scanState)) return;
       try {
-        const barcodes = await det.detect(videoEl);
-        if (barcodes.length > 0) {
-          clearInterval(_barcodeLoop);
-          const code = barcodes[0].rawValue;
-          S.scanState = 'lockon'; updateScanViewport();
-          sfx('scan'); vibrate([8,30,8]);
-          setTimeout(() => {
-            S.scanState = 'decoding'; S.aiConf = 85; updateScanViewport();
-            setTimeout(() => {
-              const r = SCAN_POOL[Math.floor(Math.random()*SCAN_POOL.length)];
-              const exp = new Date(); exp.setDate(exp.getDate() + r.expDays);
-              S.scanResult = { ...r, exp, dest: S.scanDest, barcode: code };
-              S.scanState = 'detected'; S.aiConf = 99;
-              sfx('success'); vibrate([10,40,15]);
-              updateTabBody();
-            }, 600);
-          }, 500);
+        const codes = await det.detect(videoEl);
+        if (codes.length > 0) {
+          clearInterval(_barcodeLoop); _barcodeLoop = null;
+          processBarcode(codes[0].rawValue, codes[0].format);
         }
       } catch(e) {}
-    }, 250);
-  } catch(e) {}
+    }, 200);
+  } catch(e) {
+    S.scanState = 'detecting'; updateScanViewport();
+  }
+}
+
+function startZXingScanner(videoEl) {
+  if (!window.ZXing) { startLegacyCamera(videoEl); return; }
+  try {
+    _zxingReader = new ZXing.BrowserMultiFormatReader(null, { delayBetweenScanAttempts: 150 });
+    _zxingReader.decodeFromConstraints(
+      { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      videoEl,
+      (result, err) => {
+        if (!result || !S.cameraActive) return;
+        if (['lockon','decoding','detected'].includes(S.scanState)) return;
+        processBarcode(result.getText(), result.getBarcodeFormat().toString());
+      }
+    ).then(() => {
+      S.scanState = 'detecting'; updateScanViewport();
+      showToast('📷 ZXing พร้อม — เล็งบาร์โค้ด GS1', '#2ee6a6');
+    }).catch(e => {
+      console.warn('ZXing decodeFromConstraints:', e);
+      _zxingReader = null;
+      startLegacyCamera(videoEl);
+    });
+  } catch(e) {
+    console.warn('ZXing init:', e);
+    _zxingReader = null;
+    startLegacyCamera(videoEl);
+  }
+}
+
+function startLegacyCamera(videoEl) {
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+    .then(stream => {
+      S.cameraStream = stream;
+      videoEl.srcObject = stream;
+      videoEl.play().catch(() => {});
+      startBarcodeDetection(videoEl);
+      showToast('📷 กล้องพร้อม — เล็งที่บาร์โค้ด', '#2ee6a6');
+    })
+    .catch(() => {
+      S.cameraActive = false; updateTabBody();
+      showToast('📵 ไม่สามารถเปิดกล้องได้ — ลอง AI สแกน', '#ff9f43');
+    });
 }
 
 function bindStockTab() {
@@ -1475,6 +1547,16 @@ function updateNavTabs() {
 
 // ── LOGIN LOGIC ────────────────────────────────────────
 function pinPress(k) {
+  // Ripple on key
+  const rippleEl = k === 'del' ? document.getElementById('pinDel')
+    : k === 'face' ? document.getElementById('pinFaceBtn')
+    : document.querySelector(`.pin-key[data-key="${k}"]`);
+  if (rippleEl) {
+    rippleEl.classList.remove('ripple');
+    void rippleEl.offsetWidth;
+    rippleEl.classList.add('ripple');
+    setTimeout(() => rippleEl.classList.remove('ripple'), 500);
+  }
   if (k === 'del') {
     S.pin = S.pin.slice(0, -1); S.pinErr = false;
     vibrate(5);
@@ -1601,6 +1683,160 @@ const SCAN_POOL = [
   { name:'Metformin 850mg', gen:'Metformin HCl', lot:'MF'+Date.now().toString().slice(-4), expDays:-3, qty:12, highAlert:false, lasa:false, cold:false },
 ];
 
+// ── GS1 BARCODE ENGINE ────────────────────────────────
+// Fixed-length AI data-field lengths (after 2-digit AI code)
+const GS1_FIXED = {
+  '00':18,'01':14,'02':14,'03':14,'04':16,
+  '11':6,'12':6,'13':6,'14':6,'15':6,'16':6,'17':6,
+  '18':6,'19':6,'20':2,'31':6,'32':6,'33':6,'34':6,'35':6,'36':6,'41':13,
+};
+
+function parseGS1(raw) {
+  const ais = {};
+  if (!raw) return ais;
+  let s = raw.replace(/[\x00-\x08\x0B\x0E-\x1C\x1E-\x1F]/g, '').trim();
+
+  // Parenthesis notation: (01)06901234567890(17)260630(10)LOT123
+  if (/\(\d{2,4}\)/.test(s)) {
+    for (const [,ai,val] of s.matchAll(/\((\d{2,4})\)([^(]*)/g)) {
+      ais[ai] = val.replace(/\x1D/g,'').trim();
+    }
+    return ais;
+  }
+
+  // Raw GS-separated or compact format
+  let pos = 0;
+  while (pos < s.length) {
+    if (s[pos] === '\x1D') { pos++; continue; }
+    const ai = s.slice(pos, pos + 2);
+    if (!/^\d{2}/.test(ai)) break;
+    pos += 2;
+    const fl = GS1_FIXED[ai];
+    if (fl !== undefined) {
+      ais[ai] = s.slice(pos, pos + fl);
+      pos += fl;
+    } else {
+      const gs = s.indexOf('\x1D', pos);
+      if (gs === -1) { ais[ai] = s.slice(pos); break; }
+      ais[ai] = s.slice(pos, gs);
+      pos = gs + 1;
+    }
+  }
+  return ais;
+}
+
+function parseGS1Expiry(yymmdd) {
+  if (!yymmdd || yymmdd.length < 6) return null;
+  const yy = parseInt(yymmdd.slice(0,2));
+  const mm = parseInt(yymmdd.slice(2,4)) - 1;
+  let dd = parseInt(yymmdd.slice(4,6));
+  const year = yy <= 49 ? 2000 + yy : 1900 + yy;
+  if (dd === 0) { // 00 = last day of month
+    const d = new Date(year, mm + 1, 0);
+    return d;
+  }
+  return new Date(year, mm, dd);
+}
+
+function buildResultFromGS1(gs1, rawText) {
+  const lot = gs1['10'] || ('SCN' + Date.now().toString().slice(-5));
+  const qty = gs1['37'] ? Math.max(1, parseInt(gs1['37'])) : 1;
+  const gtin = gs1['01'] || '';
+  const expDate = gs1['17'] ? (parseGS1Expiry(gs1['17']) || new Date(Date.now() + 90*86400000))
+    : new Date(Date.now() + 90*86400000);
+
+  // Match lot number against inventory
+  const byLot = S.items.find(i => i.lot === lot);
+  if (byLot) return { ...byLot, qty: byLot.qty + qty, dest: S.scanDest, exp: expDate, barcode: rawText, gs1 };
+
+  // Match GTIN against inventory
+  if (gtin) {
+    const byGtin = S.items.find(i => i.gtin === gtin || (i.lot && gtin.endsWith(i.lot)));
+    if (byGtin) return { ...byGtin, lot, qty, dest: S.scanDest, exp: expDate, barcode: rawText, gs1 };
+  }
+
+  // New entry — pick representative drug from pool as template
+  const p = SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)];
+  return {
+    name: p.name, gen: p.gen, lot, qty, exp: expDate,
+    dest: S.scanDest, highAlert: p.highAlert, lasa: p.lasa, cold: p.cold,
+    barcode: rawText, gs1, gtin, _fromScan: true,
+  };
+}
+
+function processBarcode(rawText, formatName) {
+  if (['lockon','decoding','detected'].includes(S.scanState)) return;
+  vibrate([8,30,8]); sfx('scan');
+  S.scanState = 'detecting'; S.aiConf = 0; S.scanResult = null;
+  updateScanViewport();
+
+  // Parse GS1 data now so it's ready at result phase
+  const gs1 = parseGS1(rawText);
+  const hasGS1 = !!(gs1['01'] || gs1['17'] || gs1['10']);
+
+  // Update detected format label
+  if (formatName) {
+    const fn = formatName.toUpperCase();
+    if (fn.includes('DATA_MATRIX') || fn.includes('DATAMATRIX')) S.scanFormat = 'GS1 DataMatrix';
+    else if (fn.includes('QR')) S.scanFormat = 'QR Code';
+    else if (fn.includes('EAN_13') || fn.includes('EAN13')) S.scanFormat = 'EAN-13';
+    else if (fn.includes('CODE_128') || fn.includes('CODE128')) S.scanFormat = 'Code 128';
+    else if (fn.includes('GS1_128') || fn.includes('GS1128')) S.scanFormat = 'GS1-128';
+  }
+
+  setTimeout(() => {
+    if (S.scanState !== 'detecting') return;
+    sfx('tick'); vibrate(6);
+    S.scanState = 'lockon'; S.aiConf = 60;
+    updateScanViewport();
+  }, 380);
+
+  setTimeout(() => {
+    if (S.scanState !== 'lockon') return;
+    sfx('tick'); vibrate(4);
+    S.scanState = 'decoding'; S.aiConf = 75;
+    updateScanViewport();
+    let c = 75;
+    const tick = setInterval(() => {
+      c = Math.min(98, c + Math.floor(Math.random() * 8 + 3));
+      S.aiConf = c;
+      const txt = document.querySelector('.ai-conf-text');
+      const bar = document.querySelector('.ai-conf-bar');
+      if (txt) txt.textContent = c + '%';
+      if (bar) bar.style.strokeDashoffset = 201 - (201 * c / 100);
+      if (c >= 98) clearInterval(tick);
+    }, 80);
+  }, 680);
+
+  setTimeout(() => {
+    if (!['lockon','decoding'].includes(S.scanState)) return;
+    const result = hasGS1
+      ? buildResultFromGS1(gs1, rawText)
+      : (() => {
+          const p = { ...SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)] };
+          const exp = new Date(); exp.setDate(exp.getDate() + (p.expDays || 90));
+          return { ...p, exp, dest: S.scanDest, barcode: rawText };
+        })();
+
+    S.scanResult = result;
+    S.scanState = 'detected'; S.aiConf = 99;
+
+    if (S.rapidMode) {
+      S.scanCount++;
+      S.scanHistory.unshift({ ...result, ts: new Date() });
+      if (S.scanHistory.length > 20) S.scanHistory.pop();
+      addToItems(result);
+      speak(result.name);
+      sfx('success'); vibrate([8,40,12]);
+      showToast(`✓ #${S.scanCount}: ${result.name}`, '#2ee6a6');
+    } else {
+      sfx('success'); vibrate([10,40,15]);
+    }
+    updateTabBody();
+  }, 1050);
+}
+
+// ── SIM SCAN ──────────────────────────────────────────
 function doSimScan() {
   if (['detecting','lockon','decoding'].includes(S.scanState)) return;
   vibrate([8,30,8]); sfx('scan');
@@ -1670,11 +1906,22 @@ function updateScanViewport() {
   const state = S.scanState;
   ['sv-idle','sv-detecting','sv-lockon','sv-decoding','sv-detected'].forEach(c => vp.classList.remove(c));
   vp.classList.add('sv-' + state);
-  vp.style.height = ['detecting','lockon','decoding'].includes(state) ? '310px' : '280px';
+
+  if (S.cameraActive) {
+    vp.style.height = '390px';
+    vp.classList.add('cam-active');
+  } else {
+    vp.style.height = ['detecting','lockon','decoding'].includes(state) ? '310px' : '280px';
+    vp.classList.remove('cam-active');
+  }
+
   const badge = vp.querySelector('.scan-phase-badge');
   const labels = {
-    idle:'เล็งกล้องที่บาร์โค้ด', detecting:'🔍 AI กำลังค้นหา…',
-    lockon:'🎯 ล็อคเป้าหมาย…', decoding:'⚡ GS1 ถอดรหัส…', detected:'✓ พบข้อมูล!',
+    idle: S.cameraActive ? '📷 เล็งบาร์โค้ดที่กล้อง…' : 'เล็งกล้องที่บาร์โค้ด',
+    detecting: '🔍 AI กำลังค้นหา…',
+    lockon: '🎯 ล็อคเป้าหมาย…',
+    decoding: '⚡ GS1 ถอดรหัส…',
+    detected: '✓ พบข้อมูล!',
   };
   const colors = {
     idle:{bg:'rgba(0,0,0,.5)',b:'rgba(255,255,255,.15)',c:'rgba(255,255,255,.8)'},
