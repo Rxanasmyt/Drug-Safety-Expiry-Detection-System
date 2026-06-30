@@ -220,6 +220,7 @@ function renderScreen() {
   }
   updateClock();
   renderDesktopPanel();
+  updateEdgeGlow();
 }
 
 // ── LOCK — PROFILE PICKER ─────────────────────────────
@@ -560,6 +561,7 @@ function renderScanTab() {
 
   /* scan stats */
   const redCount = S.items.filter(i => itemStatus(i).key === 'RED').length;
+  const sk = getStreakData();
   const statsHTML = `
     <div class="scan-stats-bar">
       <div class="scan-stat" style="animation-delay:.05s">
@@ -567,13 +569,17 @@ function renderScanTab() {
         <div class="scan-stat-label">รายการทั้งหมด</div>
       </div>
       <div class="scan-stat" style="animation-delay:.1s">
-        <div class="scan-stat-val" style="color:${S.scanCount>0?'#2ee6a6':'var(--ink3)'}">${S.scanCount}</div>
-        <div class="scan-stat-label">สแกนวันนี้</div>
+        <div class="scan-stat-val" style="color:${S.scanCount>0?'#2ee6a6':'var(--ink3)'}">${sk.total||S.scanCount}</div>
+        <div class="scan-stat-label">สแกนสะสม</div>
       </div>
       <div class="scan-stat" style="animation-delay:.15s">
         <div class="scan-stat-val" style="color:${redCount>0?'#ff4d5e':'#2ee6a6'}">${redCount}</div>
         <div class="scan-stat-label">ยาเสี่ยง</div>
       </div>
+      ${sk.streak > 0 ? `<div class="scan-stat" style="animation-delay:.2s">
+        <div class="scan-stat-val" style="color:#ff9f43">🔥${sk.streak}</div>
+        <div class="scan-stat-label">วันติดต่อกัน</div>
+      </div>` : ''}
     </div>`;
 
   /* format chips */
@@ -1231,6 +1237,9 @@ function bindApp() {
     if (e.key === 'Escape' && S.cmdPaletteOpen) closeCmdPalette();
   });
 
+  // Stress-aware tap logging
+  document.addEventListener('pointerdown', detectStress, { passive: true });
+
   bindTabEvents();
   bindSheetEvents();
   bindConfirmEvents();
@@ -1240,6 +1249,7 @@ function bindTabEvents() {
   if (S.tab === 'scan') bindScanTab();
   else if (S.tab === 'stock') bindStockTab();
   else if (S.tab === 'cfg') bindCfgTab();
+  initLongPress();
 }
 
 function bindScanTab() {
@@ -1859,6 +1869,8 @@ function processBarcode(rawText, formatName) {
     const _st = itemStatus(result);
     playScanChord(_st.key, result.highAlert);
     handoffWrite(result, _st);
+    bumpStreak();
+    detectStress();
 
     // Hands-free TTS: full spoken summary so staff need not look at screen
     if (S.voiceFeedback && S.settings.soundOn) {
@@ -2211,6 +2223,184 @@ function initAutoLock() {
   }, 30000);
 }
 
+// ── EDGE GLOW (Calm Ambient Alert) ────────────────────
+// Conveys overall stock health silently via phone-frame glow — no popup
+function updateEdgeGlow() {
+  const phone = document.getElementById('pc-phone');
+  if (!phone) return;
+  phone.classList.remove('eglow-red', 'eglow-orange', 'eglow-yellow');
+  if (S.screen !== 'app') return;
+  const keys = S.items.map(it => itemStatus(it).key);
+  if (keys.includes('RED'))    phone.classList.add('eglow-red');
+  else if (keys.includes('ORANGE')) phone.classList.add('eglow-orange');
+  else if (keys.includes('YELLOW')) phone.classList.add('eglow-yellow');
+}
+
+// ── PROGRESSIVE DISCLOSURE (Long Press Popover) ────────
+let _lpTimer = null;
+let _lpCurrentItem = null;
+
+function initLongPress() {
+  document.querySelectorAll('.drug-card[data-id]').forEach(card => {
+    card.addEventListener('touchstart', () => {
+      clearTimeout(_lpTimer);
+      _lpTimer = setTimeout(() => lpShow(card), 620);
+    }, { passive: true });
+    ['touchend','touchmove','touchcancel'].forEach(ev =>
+      card.addEventListener(ev, () => clearTimeout(_lpTimer), { passive: true }));
+    card.addEventListener('contextmenu', e => { e.preventDefault(); lpShow(card); });
+  });
+}
+
+function lpShow(card) {
+  const it = S.items.find(x => x.id === card.dataset.id || x.lot === card.dataset.id);
+  if (!it) return;
+  _lpCurrentItem = it;
+  vibrate([8, 40, 8]);
+  const st = itemStatus(it);
+  const dl = daysLeft(it.exp);
+  const total = Math.max((it.age || 0) + Math.max(dl, 0), 1);
+  const agePct  = Math.min(((it.age || 0) / total) * 100, 100).toFixed(1);
+  const remPct  = Math.min((Math.max(dl, 0) / total) * 100, 100).toFixed(1);
+
+  document.getElementById('lp-pop')?.remove();
+  document.getElementById('lp-bd')?.remove();
+
+  const pop = document.createElement('div');
+  pop.id = 'lp-pop';
+  pop.className = 'lp-pop';
+  pop.innerHTML = `
+    <div class="lp-hdr">
+      <div class="lp-nm">${it.name}</div>
+      <button class="lp-x" onclick="lpClose()">✕</button>
+    </div>
+    <div class="lp-tl">
+      <div class="lp-tl-label">อายุการใช้งาน</div>
+      <div class="lp-tl-track">
+        <div class="lp-tl-used" style="width:${agePct}%"></div>
+        <div class="lp-tl-rem"  style="width:${remPct}%;background:${st.c}88"></div>
+      </div>
+      <div class="lp-tl-row">
+        <span>ใช้แล้ว ${it.age||0} วัน</span>
+        <span style="color:${st.c}">${dl<0?'หมดอายุแล้ว':'เหลือ '+dl+' วัน'}</span>
+      </div>
+    </div>
+    <div class="lp-rows">
+      <div class="lp-row"><span class="lp-lbl">Lot No.</span><span class="lp-val mono">${it.lot}</span></div>
+      <div class="lp-row"><span class="lp-lbl">จำนวน</span><span class="lp-val">${it.qty} หน่วย</span></div>
+      <div class="lp-row"><span class="lp-lbl">ตำแหน่ง</span><span class="lp-val">${it.loc==='FRONT_SHELF'?'🛎 หน้าเคาน์เตอร์':'📦 คลัง'}</span></div>
+    </div>
+    <div class="lp-footer">
+      <button class="lp-detail-btn" onclick="lpOpenFull()">ดูข้อมูลเต็ม →</button>
+    </div>`;
+
+  const bd = document.createElement('div');
+  bd.id = 'lp-bd';
+  bd.className = 'lp-bd';
+  bd.addEventListener('click', lpClose);
+
+  const scr = document.getElementById('app-screen') || document.getElementById('screen');
+  if (scr) { scr.appendChild(bd); scr.appendChild(pop); }
+  setTimeout(() => pop.classList.add('visible'), 10);
+  setTimeout(lpClose, 7000);
+}
+
+function lpClose() {
+  document.getElementById('lp-pop')?.remove();
+  document.getElementById('lp-bd')?.remove();
+}
+
+function lpOpenFull() {
+  lpClose();
+  if (_lpCurrentItem) showDrugSheet(_lpCurrentItem);
+}
+
+// ── GAMIFICATION (Scan Streak) ─────────────────────────
+function getStreakData() {
+  try {
+    const d = JSON.parse(localStorage.getItem('scanStreak') || '{}');
+    const today  = new Date().toDateString();
+    const yest   = new Date(Date.now() - 86400000).toDateString();
+    if (d.lastDay === today)  return d;
+    if (d.lastDay === yest)   return { streak: d.streak, lastDay: d.lastDay, total: d.total || 0 };
+    return { streak: 0, lastDay: today, total: d.total || 0 };
+  } catch(e) { return { streak: 0, lastDay: '', total: 0 }; }
+}
+
+function bumpStreak() {
+  try {
+    const today = new Date().toDateString();
+    const d = getStreakData();
+    const yest = new Date(Date.now() - 86400000).toDateString();
+    const streak = (d.lastDay === yest || d.lastDay === today) ? d.streak + (d.lastDay === today ? 0 : 1) : 1;
+    const total  = (d.total || 0) + 1;
+    localStorage.setItem('scanStreak', JSON.stringify({ streak, lastDay: today, total }));
+    if (total % 25 === 0) showToast(`🏆 สแกนยาแล้ว ${total} ครั้ง! ยอดเยี่ยม`, '#ffd23f');
+    else if (streak > 1 && streak % 7 === 0) showToast(`🔥 ${streak} วันติดต่อกัน! ต่อเนื่องมาก`, '#ff9f43');
+    return { streak, total };
+  } catch(e) { return { streak: 0, total: 0 }; }
+}
+
+function streakBadgeHTML() {
+  const d = getStreakData();
+  if (!d.total) return '';
+  return `<div class="streak-badge">
+    <span class="streak-fire">🔥</span>
+    <span class="streak-num">${d.streak}</span>
+    <span class="streak-lbl">วัน · ${d.total} ครั้ง</span>
+  </div>`;
+}
+
+// ── STRESS-AWARE UI ────────────────────────────────────
+const _tapLog = [];
+let _stressMode = false;
+function detectStress() {
+  const now = Date.now();
+  _tapLog.push(now);
+  while (_tapLog.length > 0 && now - _tapLog[0] > 1200) _tapLog.shift();
+  _stressMode = _tapLog.length >= 4;
+  if (_stressMode) document.getElementById('pc-root')?.classList.add('stress-mode');
+  else document.getElementById('pc-root')?.classList.remove('stress-mode');
+}
+
+function stressToast(msg, color) {
+  const dur = _stressMode ? 5500 : 2800;
+  const el = document.getElementById('toast');
+  el.style.borderColor = (color||'#2dd4bf') + '66';
+  el.style.boxShadow = `0 0 28px -6px ${color||'#2dd4bf'}66`;
+  el.innerHTML = `<span style="flex:1">${msg}</span>`;
+  el.classList.remove('hidden');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => el.classList.add('hidden'), dur);
+}
+
+// ── AI COPILOT (Natural Language) ─────────────────────
+const NL_MAP = [
+  { re: /หมดอายุ|expired|วิกฤต|ด่วน|recall|ถูกเรียกคืน/i,  id:'emerg' },
+  { re: /ใกล้หมด|คืนบริษัท|ส้ม|orange/i,                  id:'recall' },
+  { re: /รายงาน|สรุป|กราฟ|สถิติ|kpi|dashboard/i,           id:'dash' },
+  { re: /ตั้งค่า|setting|config|เกณฑ์|ธีม/i,               id:'cfg' },
+  { re: /focus|โฟกัส|ซ่อน/i,                               id:'focus' },
+  { re: /ล็อก|ออก|logout|lock/i,                           id:'lock' },
+  { re: /สแกน|กล้อง|scan/i,                                id:'scan' },
+  { re: /คลัง|stock|รายการยา/i,                            id:'stock' },
+];
+function nlResolve(q) {
+  for (const p of NL_MAP) if (p.re.test(q)) return CMD_ACTIONS.find(c => c.id === p.id);
+  return null;
+}
+
+// ── POKA-YOKE (Error Prevention) ──────────────────────
+function pokaShake(el) {
+  if (!el) return;
+  el.classList.remove('poka-shake');
+  void el.offsetWidth;
+  el.classList.add('poka-shake');
+  setTimeout(() => el.classList.remove('poka-shake'), 600);
+  vibrate([8, 60, 8, 60, 8]);
+  sfx('error');
+}
+
 // ── CONTEXT-AWARE FOCUS MODE ─────────────────────────
 function getFocusMode() {
   if (S.focusManual === true) return true;
@@ -2284,18 +2474,38 @@ function closeCmdPalette() {
 function renderCmdResults() {
   const el = document.getElementById('cmd-results'); if (!el) return;
   const q = _cmdQuery.toLowerCase().trim();
+
+  // AI Copilot: NL pattern matching
+  const nlMatch = q.length > 2 ? nlResolve(q) : null;
+
   const drugs = q.length > 0 ? S.items.filter(it =>
     it.name.toLowerCase().includes(q) ||
     (it.gen||'').toLowerCase().includes(q) ||
     (it.lot||'').toUpperCase().includes(q.toUpperCase())
   ).slice(0, 6) : [];
+
   const cmds = CMD_ACTIONS.filter(c =>
     q.length === 0 ||
     c.label.toLowerCase().includes(q) ||
     c.sub.toLowerCase().includes(q) ||
     c.id.includes(q)
   );
+
   let html = '';
+
+  // NL Copilot suggestion at top
+  if (nlMatch && !cmds.find(c => c.id === nlMatch.id)) {
+    html += `<div class="cmd-section">✨ AI Copilot</div>
+      <div class="cmd-item cmd-nl" onclick="cmdExec('${nlMatch.id}')">
+        <div class="cmd-item-icon" style="background:${nlMatch.color}22;color:${nlMatch.color};font-size:15px;font-weight:700">${nlMatch.icon}</div>
+        <div class="cmd-item-body">
+          <div class="cmd-item-name">${nlMatch.label}</div>
+          <div class="cmd-item-sub">AI เดาจากคำว่า "${_cmdQuery}"</div>
+        </div>
+        <span style="font-size:10px;color:var(--brand);font-weight:700">→ ไปได้เลย</span>
+      </div>`;
+  }
+
   if (drugs.length > 0) {
     html += `<div class="cmd-section">ยาในคลัง</div>`;
     html += drugs.map(it => {
@@ -2311,6 +2521,7 @@ function renderCmdResults() {
       </div>`;
     }).join('');
   }
+
   if (cmds.length > 0) {
     html += `<div class="cmd-section">${q ? 'คำสั่ง' : 'คำสั่งด่วน'}</div>`;
     html += cmds.map(c => `<div class="cmd-item" onclick="cmdExec('${c.id}')">
@@ -2321,8 +2532,9 @@ function renderCmdResults() {
       </div>
     </div>`).join('');
   }
+
   if (!html) {
-    html = `<div class="cmd-empty">ไม่พบ "<strong>${_cmdQuery}</strong>" — ลองพิมพ์ชื่อยาหรือ Lot No.</div>`;
+    html = `<div class="cmd-empty">ไม่พบ "<strong>${_cmdQuery}</strong>" — ลองพิมพ์ชื่อยา, Lot No. หรือคำสั่งภาษาไทย</div>`;
   }
   el.innerHTML = html;
 }

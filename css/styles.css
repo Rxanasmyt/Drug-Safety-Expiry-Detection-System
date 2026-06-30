@@ -2066,6 +2066,124 @@ body {
   .dp-brand-sub { font-size: 11px; color: var(--ink3); margin-top: 3px; }
 }
 
+/* ── FLUID TYPOGRAPHY ─────────────────────────────────── */
+:root {
+  --fz-xs:   clamp(9px,   1.8vw + 6px,  11px);
+  --fz-sm:   clamp(10.5px,2vw  + 7px,  12.5px);
+  --fz-base: clamp(12px,  2.2vw + 8px,  14px);
+  --fz-md:   clamp(13px,  2.5vw + 9px,  16px);
+  --fz-lg:   clamp(15px,  3vw  + 10px,  19px);
+}
+.drug-name       { font-size: var(--fz-base); }
+.drug-gen        { font-size: var(--fz-xs);   }
+.nav-tab-label   { font-size: var(--fz-xs);   }
+.topbar-tab-name { font-size: var(--fz-md);   }
+.kpi-card-val    { font-size: var(--fz-lg);   }
+.scan-stat-val   { font-size: var(--fz-md);   }
+
+/* ── EDGE GLOW (Calm Ambient Alert) ───────────────────── */
+@keyframes eglowPulse {
+  0%, 100% { opacity: .7; }
+  50%      { opacity: 1; }
+}
+#pc-phone.eglow-red {
+  box-shadow:
+    0 0 0 2px rgba(255,77,94,.45),
+    0 0 48px 12px rgba(255,77,94,.22),
+    0 20px 80px -30px rgba(0,0,0,.8) !important;
+  animation: eglowPulse 2.2s ease-in-out infinite !important;
+}
+#pc-phone.eglow-orange {
+  box-shadow:
+    0 0 0 2px rgba(255,159,67,.35),
+    0 0 40px 8px rgba(255,159,67,.18),
+    0 20px 80px -30px rgba(0,0,0,.8) !important;
+  animation: eglowPulse 3s ease-in-out infinite !important;
+}
+#pc-phone.eglow-yellow {
+  box-shadow:
+    0 0 0 1px rgba(255,210,63,.25),
+    0 0 30px 4px rgba(255,210,63,.12),
+    0 20px 80px -30px rgba(0,0,0,.8) !important;
+}
+
+/* ── PROGRESSIVE DISCLOSURE POPOVER ───────────────────── */
+@keyframes lpIn { from { opacity:0; transform:translateY(6px) scale(.97); } to { opacity:1; transform:none; } }
+.lp-pop {
+  position: absolute;
+  left: 12px; right: 12px;
+  background: var(--card);
+  border: 1px solid var(--glassb);
+  border-radius: 18px;
+  z-index: 90;
+  padding: 14px;
+  opacity: 0;
+  transition: opacity .2s, transform .2s;
+  transform: translateY(6px) scale(.97);
+  box-shadow: 0 16px 56px -12px rgba(0,0,0,.55);
+}
+.lp-pop.visible { opacity: 1; transform: none; animation: lpIn .22s ease; }
+.lp-bd { position: absolute; inset: 0; z-index: 89; }
+.lp-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.lp-nm  { font-size: 13px; font-weight: 700; color: var(--ink); }
+.lp-x   { background: none; border: none; color: var(--ink3); font-size: 15px; cursor: pointer; padding: 2px 6px; }
+.lp-tl  { margin-bottom: 10px; }
+.lp-tl-label { font-size: 10px; color: var(--ink3); font-weight: 700; letter-spacing: .8px; text-transform: uppercase; margin-bottom: 5px; }
+.lp-tl-track { height: 7px; border-radius: 4px; background: var(--glass); display: flex; overflow: hidden; margin-bottom: 4px; }
+.lp-tl-used  { background: var(--line); border-radius: 4px 0 0 4px; }
+.lp-tl-rem   { border-radius: 0 4px 4px 0; }
+.lp-tl-row   { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink3); }
+.lp-rows     { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.lp-row      { display: flex; justify-content: space-between; font-size: 12px; }
+.lp-lbl      { color: var(--ink3); }
+.lp-val      { font-weight: 600; color: var(--ink); }
+.lp-val.mono { font-family: 'JetBrains Mono', monospace; color: #9d8cff; font-size: 11.5px; }
+.lp-footer   { border-top: 1px solid var(--line); padding-top: 10px; }
+.lp-detail-btn {
+  width: 100%; padding: 9px; border-radius: 11px;
+  background: var(--brand); color: #fff; border: none;
+  font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.lp-detail-btn:active { opacity: .8; }
+
+/* ── GAMIFICATION STREAK ──────────────────────────────── */
+.streak-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 20px;
+  background: rgba(255,159,67,.12); border: 1px solid rgba(255,159,67,.3);
+  animation: slideUp .35s ease;
+}
+.streak-fire { font-size: 14px; }
+.streak-num  { font-size: 16px; font-weight: 900; color: #ff9f43; font-family: 'Space Grotesk', sans-serif; }
+.streak-lbl  { font-size: 10px; color: var(--ink3); font-weight: 600; }
+
+/* ── POKA-YOKE (Shake Animation) ──────────────────────── */
+@keyframes pokaShake {
+  0%,100%  { transform: translateX(0); }
+  16%      { transform: translateX(-10px); }
+  33%      { transform: translateX(9px);  }
+  50%      { transform: translateX(-7px); }
+  66%      { transform: translateX(6px);  }
+  83%      { transform: translateX(-3px); }
+}
+.poka-shake { animation: pokaShake .55s cubic-bezier(.36,.07,.19,.97) both; }
+.poka-disabled { opacity: .45 !important; pointer-events: none !important; }
+
+/* ── STRESS-AWARE UI ───────────────────────────────────── */
+.stress-mode .toast {
+  font-size: 14px;
+  padding: 16px 18px;
+  border-radius: 18px;
+}
+/* Bigger touch targets in stress mode */
+.stress-mode .nav-tab { padding: 14px 10px !important; }
+.stress-mode .scan-btn-primary { padding: 20px 32px !important; font-size: 17px !important; }
+
+/* ── MINIMUM TOUCH TARGET (WCAG 44px) ─────────────────── */
+.topbar-btn  { min-width: 44px; min-height: 44px; }
+.nav-tab     { min-height: 52px; }
+.pin-key     { min-height: 64px; }
+
 /* ── COMMAND PALETTE ──────────────────────────────────── */
 @keyframes cmdSlideIn {
   from { opacity:0; transform:translateY(-14px) scale(.97); }
