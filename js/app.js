@@ -31,6 +31,9 @@ const S = {
   scanHistory: [],
   sheet: null, sheetData: null,
   confirmAction: null,
+  focusManual: null,   // null=auto (time-based), true=force-on, false=force-off
+  cmdPaletteOpen: false,
+  voiceFeedback: true, // hands-free TTS on every scan
 };
 
 // ── SEED DATA ─────────────────────────────────────────
@@ -75,14 +78,31 @@ function medColor(name) {
   return pal[n];
 }
 function shapeIconSVG(shape, color, size) {
+  // WCAG: every color indicator is paired with a shape + inner symbol.
+  // Colorblind-safe: no info conveyed by color alone.
   const sz = size || 13;
-  const paths = {
-    oct: 'M7,2 12,2 17,7 17,12 12,17 7,17 2,12 2,7 Z',
-    tri: 'M9.5,2 17,16 2,16 Z',
-    dia: 'M9.5,1 18,9.5 9.5,18 1,9.5 Z',
-  };
-  if (shape === 'cir') return `<svg width="${sz}" height="${sz}" viewBox="0 0 19 19"><circle cx="9.5" cy="9.5" r="8" fill="${color}"/></svg>`;
-  return `<svg width="${sz}" height="${sz}" viewBox="0 0 19 19"><path d="${paths[shape]}" fill="${color}"/></svg>`;
+  const ic = (shape === 'dia' || shape === 'cir') ? '#0d2b1e' : '#ffffff';
+  const w = `width="${sz}" height="${sz}" viewBox="0 0 19 19" aria-hidden="true"`;
+  switch (shape) {
+    case 'oct': return `<svg ${w}>
+      <path d="M7,2 12,2 17,7 17,12 12,17 7,17 2,12 2,7 Z" fill="${color}"/>
+      <line x1="7.2" y1="7.2" x2="11.8" y2="11.8" stroke="${ic}" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="11.8" y1="7.2" x2="7.2" y2="11.8" stroke="${ic}" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>`;
+    case 'tri': return `<svg ${w}>
+      <path d="M9.5,2 17,16.5 2,16.5 Z" fill="${color}"/>
+      <text x="9.5" y="15.5" text-anchor="middle" font-size="9.5" font-weight="900" fill="${ic}" font-family="system-ui,sans-serif">!</text>
+    </svg>`;
+    case 'dia': return `<svg ${w}>
+      <path d="M9.5,1 18,9.5 9.5,18 1,9.5 Z" fill="${color}"/>
+      <text x="9.5" y="14.5" text-anchor="middle" font-size="9" font-weight="900" fill="${ic}" font-family="system-ui,sans-serif">!</text>
+    </svg>`;
+    case 'cir': return `<svg ${w}>
+      <circle cx="9.5" cy="9.5" r="8" fill="${color}"/>
+      <polyline points="5.8,9.5 8.3,12 13.2,7" stroke="${ic}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg>`;
+    default: return `<svg ${w}><circle cx="9.5" cy="9.5" r="8" fill="${color}"/></svg>`;
+  }
 }
 function formGlyph(form) {
   const glyphs = {
@@ -399,21 +419,23 @@ function renderFaceScreen() {
 }
 
 // ── APP SHELL ─────────────────────────────────────────
-function renderApp() {
-  const notifCount = getNotifs().length;
-  const tabs = [
-    { k:'scan', label:'สแกน', ico:'⊹' },
-    { k:'stock', label:'คลังยา', ico:'▤' },
-    { k:'dash', label:'รายงาน', ico:'◳' },
-    { k:'cfg', label:'ตั้งค่า', ico:'⚙' },
-  ];
-  const tabNames = { scan:'สแกนรับยา', stock:'คลังยา', dash:'รายงาน & KPI', cfg:'ตั้งค่าระบบ' };
+function buildNavTabs() {
+  const fm = getFocusMode();
   const alertCount = S.items.filter(i => ['RED','ORANGE'].includes(itemStatus(i).key)).length;
-
-  const navTabs = tabs.map(t => {
+  const allTabs = [
+    { k:'scan',  label:'สแกน',   ico:'⊹' },
+    { k:'stock', label:'คลังยา', ico:'▤' },
+    { k:'dash',  label:'รายงาน', ico:'◳' },
+    { k:'cfg',   label:'ตั้งค่า', ico:'⚙' },
+  ];
+  // Focus mode hides dash and cfg
+  const tabs = fm ? allTabs.filter(t => t.k === 'scan' || t.k === 'stock') : allTabs;
+  // If current tab is hidden in focus mode, redirect to scan
+  if (fm && (S.tab === 'dash' || S.tab === 'cfg')) S.tab = 'scan';
+  return tabs.map(t => {
     const active = S.tab === t.k;
     const badge = t.k === 'stock' ? alertCount : 0;
-    return `<button class="nav-tab${active?' active':''}" data-tab="${t.k}">
+    return `<button class="nav-tab${active?' active':''}" data-tab="${t.k}" aria-label="${t.label}${badge>0?' ('+badge+' แจ้งเตือน)':''}">
       <span class="nav-tab-icon">
         ${t.ico}
         ${badge > 0 && !active ? `<span class="nav-badge">${badge > 99 ? '99+' : badge}</span>` : ''}
@@ -422,12 +444,21 @@ function renderApp() {
       ${active ? '<span class="nav-tab-indicator"></span>' : ''}
     </button>`;
   }).join('');
+}
+
+function renderApp() {
+  const notifCount = getNotifs().length;
+  const tabNames = { scan:'สแกนรับยา', stock:'คลังยา', dash:'รายงาน & KPI', cfg:'ตั้งค่าระบบ' };
+  const fm = getFocusMode();
+  const navTabs = buildNavTabs();
 
   let bodyHTML = '';
   if (S.tab === 'scan') bodyHTML = renderScanTab();
   else if (S.tab === 'stock') bodyHTML = renderStockTab();
   else if (S.tab === 'dash') bodyHTML = renderDashTab();
   else if (S.tab === 'cfg') bodyHTML = renderCfgTab();
+
+  const focusChip = `<button class="focus-chip${fm?' active':''}" id="focusChipBtn" title="Focus Mode — ${fm?'เปิด':'ปิด'}">◎ ${fm?'Focus':'Auto'}</button>`;
 
   return `
     <div id="app-screen">
@@ -436,18 +467,21 @@ function renderApp() {
         <div class="topbar-info">
           <div class="topbar-tab-line">
             <span class="topbar-tab-name">${tabNames[S.tab]||''}</span>
-            <span class="topbar-time">${currentTime()}</span>
+            ${focusChip}
           </div>
           <div class="topbar-user">${S.user ? S.user.name+' · '+S.user.role : 'OPD Pharmacy'}</div>
         </div>
         <div class="sync-badge ${S.offlineMode?'offline':'online'}">
           ${S.offlineMode ? '📴 Offline' : '✓ Synced'}
         </div>
-        <button class="topbar-btn" id="notifBtn">
+        <button class="topbar-btn" id="cmdBtn" aria-label="Command Palette">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        </button>
+        <button class="topbar-btn" id="notifBtn" aria-label="การแจ้งเตือน">
           🔔
           ${notifCount > 0 ? `<span class="topbar-btn-badge">${notifCount}</span>` : ''}
         </button>
-        <button class="topbar-btn" id="lockBtn">⏻</button>
+        <button class="topbar-btn" id="lockBtn" aria-label="ล็อกหน้าจอ">⏻</button>
       </div>
       <div id="app-body">
         <div class="tab-pane" id="tab-body">${bodyHTML}</div>
@@ -1166,20 +1200,35 @@ function bindApp() {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
       S.tab = btn.dataset.tab;
-      renderAppBody();
-      updateNavTabs();
+      renderAppBody(); updateNavTabs();
     });
   });
 
   // Topbar
-  const notifBtn = document.getElementById('notifBtn');
-  if (notifBtn) notifBtn.addEventListener('click', () => {
+  document.getElementById('notifBtn')?.addEventListener('click', () => {
     vibrate(6); S.sheet = 'notif'; renderAppBody(); updateNavTabs();
   });
-  const lockBtn = document.getElementById('lockBtn');
-  if (lockBtn) lockBtn.addEventListener('click', () => {
-    S.screen = 'lock'; S.user = null; S.loginStep = 'profiles';
-    renderScreen();
+  document.getElementById('lockBtn')?.addEventListener('click', () => {
+    S.screen = 'lock'; S.user = null; S.loginStep = 'profiles'; renderScreen();
+  });
+  document.getElementById('cmdBtn')?.addEventListener('click', () => openCmdPalette());
+  document.getElementById('focusChipBtn')?.addEventListener('click', () => toggleFocusMode());
+
+  // Swipe-down from top to open command palette
+  let _swipeY0 = 0;
+  const appScr = document.getElementById('app-screen');
+  if (appScr) {
+    appScr.addEventListener('touchstart', e => { _swipeY0 = e.touches[0]?.clientY || 0; }, { passive: true });
+    appScr.addEventListener('touchend', e => {
+      const dy = (e.changedTouches[0]?.clientY || 0) - _swipeY0;
+      if (dy > 70 && _swipeY0 < 130 && !S.cmdPaletteOpen) openCmdPalette();
+    }, { passive: true });
+  }
+
+  // Keyboard shortcut: Ctrl+K / Cmd+K
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openCmdPalette(); }
+    if (e.key === 'Escape' && S.cmdPaletteOpen) closeCmdPalette();
   });
 
   bindTabEvents();
@@ -1516,34 +1565,18 @@ function updateTabBody() {
 function updateNavTabs() {
   const nav = document.getElementById('app-nav');
   if (!nav) return;
-  const alertCount = S.items.filter(i => ['RED','ORANGE'].includes(itemStatus(i).key)).length;
-  const tabs = [
-    { k:'scan', label:'สแกน', ico:'⊹' },
-    { k:'stock', label:'คลังยา', ico:'▤' },
-    { k:'dash', label:'รายงาน', ico:'◳' },
-    { k:'cfg', label:'ตั้งค่า', ico:'⚙' },
-  ];
-  nav.innerHTML = tabs.map(t => {
-    const active = S.tab === t.k;
-    const badge = t.k === 'stock' ? alertCount : 0;
-    return `<button class="nav-tab${active?' active':''}" data-tab="${t.k}">
-      <span class="nav-tab-icon">
-        ${t.ico}
-        ${badge > 0 && !active ? `<span class="nav-badge">${badge}</span>` : ''}
-      </span>
-      <span class="nav-tab-label">${t.label}</span>
-      ${active ? '<span class="nav-tab-indicator"></span>' : ''}
-    </button>`;
-  }).join('');
+  nav.innerHTML = buildNavTabs();
   nav.querySelectorAll('.nav-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
-      S.tab = btn.dataset.tab;
-      S.sheet = null;
-      renderAppBody();
-      updateNavTabs();
+      S.tab = btn.dataset.tab; S.sheet = null;
+      renderAppBody(); updateNavTabs();
     });
   });
+  // Refresh focus chip in topbar too
+  const chip = document.getElementById('focusChipBtn');
+  const fm = getFocusMode();
+  if (chip) { chip.textContent = `◎ ${fm?'Focus':'Auto'}`; chip.className = `focus-chip${fm?' active':''}`; }
 }
 
 // ── LOGIN LOGIC ────────────────────────────────────────
@@ -1827,12 +1860,19 @@ function processBarcode(rawText, formatName) {
     playScanChord(_st.key, result.highAlert);
     handoffWrite(result, _st);
 
+    // Hands-free TTS: full spoken summary so staff need not look at screen
+    if (S.voiceFeedback && S.settings.soundOn) {
+      const _dl = daysLeft(result.exp);
+      const _dlTxt = _dl < 0 ? `หมดอายุแล้ว ${-_dl} วัน` : `เหลือ ${_dl} วัน`;
+      const _stTh = { GREEN:'ปลอดภัย', YELLOW:'เฝ้าระวัง', ORANGE:'ใกล้หมดอายุ', RED:'วิกฤต' }[_st.key] || '';
+      speak(`${result.name}. ${_dlTxt}. ${_stTh}`);
+    }
+
     if (S.rapidMode) {
       S.scanCount++;
       S.scanHistory.unshift({ ...result, ts: new Date() });
       if (S.scanHistory.length > 20) S.scanHistory.pop();
       addToItems(result);
-      speak(result.name);
       vibrate([8,40,12]);
       showToast(`✓ #${S.scanCount}: ${result.name}`, _st.c);
     } else {
@@ -2169,6 +2209,133 @@ function initAutoLock() {
       renderScreen();
     }
   }, 30000);
+}
+
+// ── CONTEXT-AWARE FOCUS MODE ─────────────────────────
+function getFocusMode() {
+  if (S.focusManual === true) return true;
+  if (S.focusManual === false) return false;
+  const h = new Date().getHours();
+  return h >= 8 && h < 12;
+}
+
+function toggleFocusMode() {
+  // Cycle: auto → force-on → force-off → auto
+  if (S.focusManual === null) S.focusManual = true;
+  else if (S.focusManual === true) S.focusManual = false;
+  else S.focusManual = null;
+  const fm = getFocusMode();
+  renderScreen();
+  showToast(fm ? '◎ Focus Mode เปิดแล้ว — ซ่อนเมนูที่ไม่จำเป็น' : '◎ Focus Mode ปิด — แสดงเมนูทั้งหมด', '#ff9f43');
+}
+
+// ── COMMAND PALETTE ────────────────────────────────────
+let _cmdQuery = '';
+const CMD_ACTIONS = [
+  { id:'scan',   label:'สแกนยา',              sub:'เปิดหน้ากล้องสแกนบาร์โค้ด',      icon:'⊹', color:'#009E9E', act:() => { S.tab='scan';   renderAppBody(); updateNavTabs(); } },
+  { id:'stock',  label:'คลังยา',              sub:'ดูรายการยาและสต็อกทั้งหมด',       icon:'▤', color:'#6366f1', act:() => { S.tab='stock';  renderAppBody(); updateNavTabs(); } },
+  { id:'dash',   label:'รายงาน & KPI',         sub:'กราฟสรุปและสถิติยา',             icon:'◳', color:'#0ea5e9', act:() => { S.tab='dash';   renderAppBody(); updateNavTabs(); } },
+  { id:'cfg',    label:'ตั้งค่าระบบ',           sub:'เกณฑ์แจ้งเตือน เสียง ธีม',       icon:'⚙', color:'#8b5cf6', act:() => { S.tab='cfg';    renderAppBody(); updateNavTabs(); } },
+  { id:'focus',  label:'สลับ Focus Mode',       sub:'ซ่อน/แสดงเมนูตามช่วงเวลา',       icon:'◎', color:'#ff9f43', act:toggleFocusMode },
+  { id:'recall', label:'ยาถูกเรียกคืน (Recall)', sub:'กรองยาที่ต้องคืนบริษัท',          icon:'⚠', color:'#ff4d5e', act:() => { S.tab='stock'; S.stockFilter='orange'; renderAppBody(); updateNavTabs(); } },
+  { id:'emerg',  label:'ยาวิกฤต / ยาหมดอายุ',   sub:'แสดงยาสถานะ RED ทั้งหมด',         icon:'⬢', color:'#ff4d5e', act:() => { S.tab='stock'; S.stockFilter='red'; renderAppBody(); updateNavTabs(); } },
+  { id:'lock',   label:'ล็อกหน้าจอ',            sub:'กลับสู่หน้าเลือกผู้ใช้',          icon:'⏻', color:'#888',    act:() => { S.screen='lock'; S.user=null; S.loginStep='profiles'; renderScreen(); } },
+];
+
+function openCmdPalette() {
+  if (S.screen !== 'app') return;
+  S.cmdPaletteOpen = true; _cmdQuery = '';
+  let el = document.getElementById('cmd-palette');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'cmd-palette';
+    el.className = 'cmd-overlay';
+    const appScr = document.getElementById('app-screen');
+    if (appScr) appScr.appendChild(el);
+  }
+  el.innerHTML = `
+    <div class="cmd-backdrop" id="cmd-bd"></div>
+    <div class="cmd-box">
+      <div class="cmd-search-row">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+        <input id="cmd-input" class="cmd-input" placeholder="พิมพ์ชื่อยา หรือคำสั่ง..." autocomplete="off" spellcheck="false">
+        <span class="cmd-esc" onclick="closeCmdPalette()">ESC</span>
+      </div>
+      <div class="cmd-results" id="cmd-results"></div>
+    </div>`;
+  document.getElementById('cmd-bd').addEventListener('click', closeCmdPalette);
+  const inp = document.getElementById('cmd-input');
+  inp.addEventListener('input', e => { _cmdQuery = e.target.value; renderCmdResults(); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeCmdPalette();
+    if (e.key === 'Enter') { const f = document.querySelector('.cmd-item'); if (f) f.click(); }
+  });
+  setTimeout(() => inp.focus(), 60);
+  renderCmdResults();
+  vibrate(8); sfx('tick');
+}
+
+function closeCmdPalette() {
+  S.cmdPaletteOpen = false;
+  const el = document.getElementById('cmd-palette');
+  if (el) el.remove();
+}
+
+function renderCmdResults() {
+  const el = document.getElementById('cmd-results'); if (!el) return;
+  const q = _cmdQuery.toLowerCase().trim();
+  const drugs = q.length > 0 ? S.items.filter(it =>
+    it.name.toLowerCase().includes(q) ||
+    (it.gen||'').toLowerCase().includes(q) ||
+    (it.lot||'').toUpperCase().includes(q.toUpperCase())
+  ).slice(0, 6) : [];
+  const cmds = CMD_ACTIONS.filter(c =>
+    q.length === 0 ||
+    c.label.toLowerCase().includes(q) ||
+    c.sub.toLowerCase().includes(q) ||
+    c.id.includes(q)
+  );
+  let html = '';
+  if (drugs.length > 0) {
+    html += `<div class="cmd-section">ยาในคลัง</div>`;
+    html += drugs.map(it => {
+      const st = itemStatus(it); const dl = daysLeft(it.exp);
+      const idKey = it.id || it.lot;
+      return `<div class="cmd-item" onclick="cmdOpenDrug('${idKey}')">
+        <div class="cmd-item-icon" style="background:${st.c}22">${shapeIconSVG(st.shape,st.c,15)}</div>
+        <div class="cmd-item-body">
+          <div class="cmd-item-name">${it.name}</div>
+          <div class="cmd-item-sub">Lot ${it.lot} · ${dl < 0 ? 'หมดอายุแล้ว' : 'เหลือ '+dl+' วัน'}</div>
+        </div>
+        <span class="cmd-item-badge" style="background:${st.c}33;color:${st.c}">${st.key}</span>
+      </div>`;
+    }).join('');
+  }
+  if (cmds.length > 0) {
+    html += `<div class="cmd-section">${q ? 'คำสั่ง' : 'คำสั่งด่วน'}</div>`;
+    html += cmds.map(c => `<div class="cmd-item" onclick="cmdExec('${c.id}')">
+      <div class="cmd-item-icon" style="background:${c.color}22;color:${c.color};font-size:15px;font-weight:700">${c.icon}</div>
+      <div class="cmd-item-body">
+        <div class="cmd-item-name">${c.label}</div>
+        <div class="cmd-item-sub">${c.sub}</div>
+      </div>
+    </div>`).join('');
+  }
+  if (!html) {
+    html = `<div class="cmd-empty">ไม่พบ "<strong>${_cmdQuery}</strong>" — ลองพิมพ์ชื่อยาหรือ Lot No.</div>`;
+  }
+  el.innerHTML = html;
+}
+
+function cmdExec(id) {
+  const c = CMD_ACTIONS.find(x => x.id === id);
+  if (c) { closeCmdPalette(); c.act(); }
+}
+
+function cmdOpenDrug(idOrLot) {
+  const it = S.items.find(x => x.id === idOrLot || x.lot === idOrLot);
+  closeCmdPalette();
+  if (it) showDrugSheet(it);
 }
 
 // ── DATA SONIFICATION (Chord UX) ─────────────────────

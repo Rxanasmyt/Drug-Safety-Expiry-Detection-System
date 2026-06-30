@@ -2066,6 +2066,102 @@ body {
   .dp-brand-sub { font-size: 11px; color: var(--ink3); margin-top: 3px; }
 }
 
+/* ── COMMAND PALETTE ──────────────────────────────────── */
+@keyframes cmdSlideIn {
+  from { opacity:0; transform:translateY(-14px) scale(.97); }
+  to   { opacity:1; transform:none; }
+}
+.cmd-overlay {
+  position: absolute; inset: 0; z-index: 200;
+  display: flex; flex-direction: column; align-items: center;
+  padding-top: 52px; padding-left: 12px; padding-right: 12px;
+}
+.cmd-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.68);
+  backdrop-filter: blur(14px) saturate(.8);
+  -webkit-backdrop-filter: blur(14px) saturate(.8);
+}
+.cmd-box {
+  position: relative; z-index: 1;
+  width: 100%;
+  background: var(--card);
+  border-radius: 20px;
+  border: 1px solid var(--glassb);
+  overflow: hidden;
+  animation: cmdSlideIn .22s cubic-bezier(.34,1.56,.64,1);
+  box-shadow: 0 28px 90px -20px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.04);
+}
+.cmd-search-row {
+  display: flex; align-items: center;
+  gap: 10px; padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.cmd-input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--ink); font-size: 15px; font-family: inherit;
+  font-weight: 500; caret-color: var(--brand);
+}
+.cmd-input::placeholder { color: var(--ink3); }
+.cmd-esc {
+  font-size: 10px; font-weight: 700; color: var(--ink3);
+  padding: 3px 7px; border-radius: 6px;
+  border: 1px solid var(--line); cursor: pointer;
+  flex-shrink: 0;
+}
+.cmd-results { max-height: 290px; overflow-y: auto; }
+.cmd-section {
+  padding: 10px 16px 4px;
+  font-size: 10px; font-weight: 700; color: var(--brand);
+  letter-spacing: 1.2px; text-transform: uppercase;
+}
+.cmd-item {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 16px; cursor: pointer;
+  transition: background .12s;
+  border-bottom: 1px solid var(--line);
+}
+.cmd-item:last-child { border-bottom: none; }
+.cmd-item:hover, .cmd-item:focus-within { background: var(--glass); }
+.cmd-item:active { background: var(--glassb); }
+.cmd-item-icon {
+  width: 32px; height: 32px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.cmd-item-body { flex: 1; min-width: 0; }
+.cmd-item-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.cmd-item-sub  { font-size: 11px; color: var(--ink3); margin-top: 1px; }
+.cmd-item-badge {
+  padding: 3px 8px; border-radius: 6px;
+  font-size: 10px; font-weight: 800; flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.cmd-empty {
+  padding: 28px 16px; text-align: center;
+  color: var(--ink3); font-size: 13px;
+}
+
+/* ── FOCUS MODE CHIP ────────────────────────────────────── */
+.focus-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 7px;
+  background: rgba(255,159,67,.1); border: 1px solid rgba(255,159,67,.3);
+  color: #ff9f43; font-size: 9.5px; font-weight: 800;
+  letter-spacing: .5px; cursor: pointer; font-family: inherit;
+  transition: background .2s, color .2s; flex-shrink: 0;
+}
+.focus-chip.active {
+  background: #ff9f43; color: #1a0a00; border-color: #ff9f43;
+}
+.focus-chip:active { opacity: .8; }
+
+/* ── ACCESSIBILITY: Colorblind-safe status icons ─────────── */
+/* Shape + inner symbol is always rendered alongside color —
+   shapeIconSVG now embeds X / ! / ✓ marks inside each shape. */
+[aria-label] { cursor: default; }
+.drug-avatar-badge { filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+
 /* ── HANDOFF BAR ──────────────────────────────────────── */
 @keyframes hbPulse {
   0%, 100% { transform: scale(1); opacity: 1; }
