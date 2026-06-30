@@ -1,35 +1,22 @@
-/*
- * PharmaCare — Firebase Configuration
- * ─────────────────────────────────────────────────────────────
- * ขั้นตอนการตั้งค่า:
- * 1. ไปที่ https://console.firebase.google.com
- * 2. สร้าง Project ใหม่ → ตั้งชื่อ "PharmaCare"
- * 3. เพิ่ม Web App → คัดลอก firebaseConfig มาวางด้านล่าง
- * 4. เปิด Firestore Database → Start in test mode
- * 5. เปิด Firebase Hosting → รัน: firebase deploy
- * ─────────────────────────────────────────────────────────────
- */
+/* PharmaCare — Firebase Configuration */
 
 const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId:             "YOUR_APP_ID",
+  apiKey:            "AIzaSyDU7fAHU2m4rtj4QK_xmDhsnL9UXnoN52E",
+  authDomain:        "detect-expire-opd-drug.firebaseapp.com",
+  projectId:         "detect-expire-opd-drug",
+  storageBucket:     "detect-expire-opd-drug.firebasestorage.app",
+  messagingSenderId: "781834103808",
+  appId:             "1:781834103808:web:6971780c76ebbc75d47ce5",
+  measurementId:     "G-RHKCEZK6MB",
 };
 
 firebase.initializeApp(firebaseConfig);
 
-/* ── Firestore instance (exported globally) ── */
 const db       = firebase.firestore();
 const drugsRef = db.collection('drugs');
 
-/* ── Enable offline persistence (ข้อมูลใช้ได้แม้ไม่มีอินเตอร์เน็ต) ── */
 db.enablePersistence({ synchronizeTabs: true }).catch(err => {
-  if (err.code === 'failed-precondition') {
-    console.warn('Persistence: multiple tabs open');
-  } else if (err.code === 'unimplemented') {
-    console.warn('Persistence: browser not supported');
+  if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {
+    console.warn('Persistence error:', err);
   }
 });
