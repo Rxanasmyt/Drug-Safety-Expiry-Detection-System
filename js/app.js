@@ -7,9 +7,17 @@ const S = {
   user: null, tab: 'scan',
   items: [],
   firestoreLoaded: false,
-  scanState: 'idle', scanResult: null, scanDest: 'SUBSTOCK',
+  scanState: 'idle',    // idle | detecting | lockon | decoding | detected
+  scanResult: null, scanDest: 'SUBSTOCK',
+  scanFormat: 'GS1 DataMatrix',
+  scanFormats: ['GS1 DataMatrix','GS1-128','QR Code','EAN-13','Code 128'],
+  aiConf: 0,
+  cameraActive: false,
+  cameraStream: null,
+  barcodeDetector: null,
   rapidMode: false, scanCount: 0,
   manualOpen: false,
+  voiceActive: false,
   stockFilter: 'all', stockSort: 'exp', stockSearch: '',
   theme: localStorage.getItem('theme') || 'dark',
   settings: { threshRed: 30, threshOrange: 60, threshYellow: 90, soundOn: true },
@@ -464,116 +472,251 @@ function getNotifs() {
 function renderScanTab() {
   const dest = S.scanDest;
   const destC = dest === 'SUBSTOCK' ? '#7c6cff' : '#2dd4bf';
-  const destLabel = dest === 'SUBSTOCK' ? 'รับเข้าคลัง' : 'เข้าจุดบริการ';
-  const det = S.scanState === 'detected';
-  const corners = [0,1,2,3].map(i => {
-    const b = det ? '#2ee6a6' : '#009E9E';
-    const pos = [{top:'0',left:'0'},{top:'0',right:'0'},{bottom:'0',left:'0'},{bottom:'0',right:'0'}][i];
-    const posStr = Object.entries(pos).map(([k,v])=>`${k}:${v}`).join(';');
-    const r = ['borderTopLeftRadius','borderTopRightRadius','borderBottomLeftRadius','borderBottomRightRadius'][i];
-    return `<div style="position:absolute;width:36px;height:36px;${posStr};${r}:10px;${i<2?`border-top:3px solid ${b}`:`border-bottom:3px solid ${b}`};${i%2===0?`border-left:3px solid ${b}`:`border-right:3px solid ${b}`};opacity:${det?1:.85};transition:all .3s"></div>`;
+  const state = S.scanState;
+  const idle = state === 'idle';
+  const detecting = state === 'detecting';
+  const lockon = state === 'lockon';
+  const decoding = state === 'decoding';
+  const detected = state === 'detected';
+  const scanning = detecting || lockon || decoding;
+
+  /* corner colour by phase */
+  const cornerC = detected ? '#2ee6a6' : lockon ? '#2ee6a6' : decoding ? '#38bdf8' : '#009E9E';
+  const cornerW = lockon || decoding || detected ? '28px' : '36px';
+  const corners = [
+    { t:'0', l:'0', bt:'border-top:3px solid '+cornerC, bl:'border-left:3px solid '+cornerC, r:'borderTopLeftRadius' },
+    { t:'0', r:'0', bt:'border-top:3px solid '+cornerC, bl:'border-right:3px solid '+cornerC, r:'borderTopRightRadius' },
+    { b:'0', l:'0', bt:'border-bottom:3px solid '+cornerC, bl:'border-left:3px solid '+cornerC, r:'borderBottomLeftRadius' },
+    { b:'0', r:'0', bt:'border-bottom:3px solid '+cornerC, bl:'border-right:3px solid '+cornerC, r:'borderBottomRightRadius' },
+  ].map(c => {
+    const pos = Object.entries(c).filter(([k])=>['t','b','l','r'].includes(k)).map(([k,v])=>({t:'top',b:'bottom',l:'left',r:'right'}[k]+':'+v).replace('r:0','right:0')).join(';');
+    const br = c.r+':10px';
+    const anim = (lockon||decoding||detected) ? 'animation:cornerLock .35s cubic-bezier(.4,0,.2,1) forwards' : '';
+    return `<div class="scan-corner-v2" style="${pos.replace(/([trblr]):(\d)/g,'$1:$2px').replace('t:','top:').replace('b:','bottom:').replace('l:','left:').replace('r:0','right:0')};width:${cornerW};height:${cornerW};${br};${c.bt};${c.bl};${anim}"></div>`;
   }).join('');
+
+  /* AI confidence ring SVG */
+  const confPct = decoding ? S.aiConf : lockon ? 60 : detecting ? 20 : detected ? 99 : 0;
+  const circumference = 201; // 2π×32
+  const dashOffset = circumference - (circumference * confPct / 100);
+  const ringC = detected ? '#2ee6a6' : decoding ? '#38bdf8' : lockon ? '#2ee6a6' : '#009E9E';
+  const confRing = `
+    <div class="ai-conf-wrap">
+      <svg class="ai-conf-svg" width="52" height="52" viewBox="0 0 52 52">
+        <circle class="ai-conf-track" cx="26" cy="26" r="22"/>
+        <circle class="ai-conf-bar" cx="26" cy="26" r="22"
+          stroke="${ringC}" style="--cd:${dashOffset};stroke-dasharray:${circumference};stroke-dashoffset:${dashOffset}"/>
+      </svg>
+      <span class="ai-conf-text" style="color:${ringC}">${confPct}%</span>
+    </div>`;
+
+  /* phase status badge */
+  const phaseInfo = {
+    idle:      { label:'เล็งกล้องที่บาร์โค้ด', bg:'rgba(0,0,0,.5)', border:'rgba(255,255,255,.15)', c:'rgba(255,255,255,.8)' },
+    detecting: { label:'🔍 AI กำลังค้นหา…',    bg:'rgba(0,158,158,.25)', border:'rgba(0,158,158,.5)', c:'#009E9E' },
+    lockon:    { label:'🎯 ล็อคเป้าหมาย…',       bg:'rgba(46,230,166,.2)', border:'rgba(46,230,166,.5)', c:'#2ee6a6' },
+    decoding:  { label:'⚡ GS1 ถอดรหัส…',        bg:'rgba(56,189,248,.2)', border:'rgba(56,189,248,.5)', c:'#38bdf8' },
+    detected:  { label:'✓ พบข้อมูล!',            bg:'rgba(46,230,166,.2)', border:'#2ee6a6', c:'#2ee6a6' },
+  }[state] || phaseInfo?.idle;
+
+  /* barcode bg bars */
+  const barcodeH = [100,40,120,60,80,110,45,90,130,55,70,100,40,80,60].map((h,i) =>
+    `<div class="scan-barcode-bar" style="height:${h}%;animation-delay:${i*.1}s"></div>`).join('');
+
+  /* scan stats */
+  const redCount = S.items.filter(i => itemStatus(i).key === 'RED').length;
+  const statsHTML = `
+    <div class="scan-stats-bar">
+      <div class="scan-stat" style="animation-delay:.05s">
+        <div class="scan-stat-val" style="color:#009E9E">${S.items.length}</div>
+        <div class="scan-stat-label">รายการทั้งหมด</div>
+      </div>
+      <div class="scan-stat" style="animation-delay:.1s">
+        <div class="scan-stat-val" style="color:${S.scanCount>0?'#2ee6a6':'var(--ink3)'}">${S.scanCount}</div>
+        <div class="scan-stat-label">สแกนวันนี้</div>
+      </div>
+      <div class="scan-stat" style="animation-delay:.15s">
+        <div class="scan-stat-val" style="color:${redCount>0?'#ff4d5e':'#2ee6a6'}">${redCount}</div>
+        <div class="scan-stat-label">ยาเสี่ยง</div>
+      </div>
+    </div>`;
+
+  /* format chips */
+  const formatChips = S.scanFormats.map(f =>
+    `<button class="scan-format-chip${S.scanFormat===f?' active':''}" data-fmt="${f}">${f}</button>`).join('');
+
+  /* scan history */
   const historyHTML = S.scanHistory.length > 0 ? `
     <div style="margin-bottom:12px">
-      <div style="font-size:11px;font-weight:700;color:var(--ink3);letter-spacing:.8px;margin-bottom:7px">ประวัติสแกนล่าสุด</div>
+      <div style="font-size:11px;font-weight:700;color:var(--ink3);letter-spacing:.8px;margin-bottom:8px">ประวัติสแกนล่าสุด</div>
       <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px">
-        ${S.scanHistory.slice(0,5).map(it => {
+        ${S.scanHistory.slice(0,6).map((it,idx) => {
           const dc = it.dest === 'SUBSTOCK' ? '#7c6cff' : '#009E9E';
-          return `<div style="flex-shrink:0;padding:8px 11px;border-radius:13px;border:1px solid ${dc}33;background:${dc}0e;min-width:130px;max-width:160px">
-            <div style="font-size:12px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.name}</div>
-            <div style="display:flex;gap:5px;margin-top:3px;align-items:center">
-              <span style="font-size:9.5px;font-weight:700;color:${dc}">${it.dest==='SUBSTOCK'?'📦':'🛎'}</span>
-              <span style="font-size:9.5px;color:var(--ink3);font-family:'JetBrains Mono',monospace">${fmtDate(it.exp)}</span>
+          const st = itemStatus({exp:it.exp});
+          return `<div class="history-chip" style="border:1px solid ${dc}33;background:${dc}0e;animation-delay:${idx*.05}s">
+            <div style="font-size:11.5px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.name.split(' ').slice(0,2).join(' ')}</div>
+            <div style="display:flex;gap:5px;margin-top:4px;align-items:center">
+              ${shapeIconSVG(st.shape,st.c,9)}
+              <span style="font-size:9px;font-weight:700;color:${dc}">${it.dest==='SUBSTOCK'?'คลัง':'เคาน์เตอร์'}</span>
+              <span style="font-size:9px;color:var(--ink3);font-family:'JetBrains Mono',monospace">${fmtDate(it.exp)}</span>
             </div>
           </div>`;
         }).join('')}
       </div>
     </div>` : '';
 
-  const resultHTML = S.scanResult ? renderScanResult(S.scanResult) : `
-    <div class="scan-empty">
-      <div class="scan-empty-icon">📷</div>
-      ยังไม่มีรายการสแกน<br>แตะ "จำลองสแกน" เพื่อทดสอบ
-    </div>`;
+  const resultHTML = S.scanResult ? renderScanResult(S.scanResult)
+    : idle ? `<div class="scan-empty"><div class="scan-empty-icon">🔬</div>ยังไม่มีรายการสแกน<br><span style="font-size:11px;color:var(--ink3)">แตะ "AI สแกน" หรือเปิดกล้องจริง</span></div>` : '';
+
+  /* voice waveform bars */
+  const waveHTML = [18,26,22,28,20,24,16].map((_,i) =>
+    `<div class="waveform-bar" style="height:${[18,26,22,28,20,24,16][i]}px;animation-delay:${i*.08}s"></div>`).join('');
 
   return `
     <div class="dest-toggle">
       <div class="dest-slider" id="destSlider" style="left:${dest==='SUBSTOCK'?'4px':'50%'};background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 6px 20px -6px ${destC}88"></div>
-      <button class="dest-btn" data-dest="SUBSTOCK" style="color:${dest==='SUBSTOCK'?'#fff':'var(--ink3)'}">📦 SUBSTOCK · รับเข้าคลัง</button>
-      <button class="dest-btn" data-dest="FRONT_SHELF" style="color:${dest==='FRONT_SHELF'?'#fff':'var(--ink3)'}">🛎 FRONT SHELF · จุดบริการ</button>
+      <button class="dest-btn" data-dest="SUBSTOCK" style="color:${dest==='SUBSTOCK'?'#fff':'var(--ink3)'}">📦 SUBSTOCK · คลัง</button>
+      <button class="dest-btn" data-dest="FRONT_SHELF" style="color:${dest==='FRONT_SHELF'?'#fff':'var(--ink3)'}">🛎 FRONT SHELF · เคาน์เตอร์</button>
     </div>
-    <div class="scan-viewport" id="scanViewport">
+
+    <!-- AI SCANNER VIEWPORT -->
+    <div class="scan-viewport sv-${state}" id="scanViewport" style="height:${scanning?'310px':'280px'}">
       <div class="scan-vp-bg"></div>
-      <div class="scan-reticle">
+      <div class="scan-ai-grid"></div>
+      <div class="scan-barcode-bg">${barcodeH}</div>
+      <div class="scan-laser-beam"></div>
+      ${confRing}
+
+      <!-- Live camera indicator -->
+      ${S.cameraActive ? `<div class="live-cam-indicator"><div class="live-cam-dot"></div>LIVE · กล้องจริง</div>` : ''}
+
+      <!-- Camera video container -->
+      <div id="camContainer" style="position:absolute;inset:0;display:${S.cameraActive?'block':'flex'};flex-direction:column;align-items:center;justify-content:center;gap:8px;${S.cameraActive?'':''}">
+        ${!S.cameraActive ? `
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="rgba(0,158,158,.4)" stroke-width="1" style="margin-top:8px">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+          <div style="font-size:11px;color:rgba(0,158,158,.55);font-weight:600">กล้องยังไม่เปิด</div>` : ''}
+      </div>
+
+      <!-- Scan reticle + corners -->
+      <div class="scan-reticle" style="width:170px;height:148px">
         ${corners}
-        ${!det ? `<div class="scan-line" style="background:linear-gradient(90deg,transparent,#009E9E,transparent)"></div>` : ''}
-        ${det ? `<div class="scan-check">✓</div>` : ''}
+        ${detected ? `<div class="scan-success-ring"></div><div class="scan-check">✓</div>` : ''}
+        ${scanning ? '<div class="scan-laser-beam" style="position:relative;animation-duration:1.4s;inset:unset;box-shadow:none;width:100%;height:1px"></div>' : ''}
       </div>
-      <div class="scan-vp-badge">
-        <span class="scan-pulse-dot" style="background:${det?'#2ee6a6':'#ff4d5e'}"></span>
-        ${det ? 'พบบาร์โค้ด…' : 'GS1 DataMatrix · 2D'}
+
+      <!-- Phase badge -->
+      <div class="scan-phase-badge" style="background:${phaseInfo.bg};border-color:${phaseInfo.border};color:${phaseInfo.c}">
+        ${phaseInfo.label}
       </div>
-      <div class="scan-vp-hint">${det ? 'กำลังถอดรหัส GS1…' : 'เล็งกล้องไปที่บาร์โค้ด'}</div>
     </div>
-    <div class="scan-actions">
-      <button class="scan-btn-primary" id="simScanBtn" style="background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 10px 28px -8px ${destC}88">
-        <span style="font-size:18px">📷</span>จำลองสแกน
+
+    <!-- Format selector -->
+    <div class="scan-format-row">${formatChips}</div>
+
+    <!-- Action buttons -->
+    <div class="scan-actions-3">
+      <button class="scan-btn-primary" id="simScanBtn" style="background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 10px 28px -8px ${destC}77;${scanning?'opacity:.65;pointer-events:none':''}">
+        <span style="font-size:17px">🤖</span>AI สแกน
+      </button>
+      <button class="scan-btn-cam${S.cameraActive?' active':''}" id="camToggleBtn">
+        <span style="font-size:16px">${S.cameraActive?'🔴':'📷'}</span>${S.cameraActive?'ปิดกล้อง':'กล้องจริง'}
       </button>
       <button class="scan-btn-manual" id="manualEntryBtn">
-        <span style="font-size:16px">✎</span>กรอกเอง
+        <span style="font-size:15px">✎</span>กรอกเอง
       </button>
     </div>
+
+    <!-- Rapid scan toggle -->
     <div class="rapid-row${S.rapidMode?' active':''}" id="rapidRow">
       <span style="font-size:16px">⚡</span>
       <div style="flex:1">
-        <div class="rapid-label" style="color:${S.rapidMode?'#2ee6a6':'var(--ink)'}">Rapid Scan</div>
-        <div class="rapid-sub">สแกนรัวต่อเนื่อง ไม่ต้องกดยืนยัน</div>
+        <div class="rapid-label" style="color:${S.rapidMode?'#2ee6a6':'var(--ink)'}">Rapid Scan Mode</div>
+        <div class="rapid-sub">สแกนต่อเนื่อง · บันทึกอัตโนมัติ · ไม่ต้องกดยืนยัน</div>
       </div>
       ${S.rapidMode && S.scanCount > 0 ? `<button id="resetRapidBtn" style="padding:5px 11px;border-radius:9px;border:none;background:rgba(124,108,255,.2);color:#9d8cff;font-size:11.5px;font-weight:700;cursor:pointer;font-family:'Sarabun',sans-serif">เริ่มใหม่</button>` : ''}
       <button class="toggle-btn" id="rapidToggle" style="background:${S.rapidMode?'#2ee6a6':'rgba(150,150,160,.35)'}">
         <span class="toggle-thumb" style="left:${S.rapidMode?'21px':'3px'}"></span>
       </button>
     </div>
+
+    ${statsHTML}
     ${historyHTML}
-    <div class="voice-bar">
-      <button class="voice-btn idle" id="voiceBtn">🎤</button>
+
+    <!-- Voice command bar -->
+    <div class="voice-bar${S.voiceActive?' active-state':''}" id="voiceBar">
+      <button class="voice-btn${S.voiceActive?' active-rec':' idle'}" id="voiceBtn">${S.voiceActive?'⏹':'🎤'}</button>
       <div class="voice-info">
-        <div class="voice-title">Voice Command · พูดเพื่อสั่งงาน</div>
-        <div class="voice-sub">พูด "รับยา", "โอน", "ยาแดง", "สรุปเวร"…</div>
+        <div class="voice-title">${S.voiceActive?'กำลังฟัง… พูดคำสั่งได้เลย':'Voice Command · AI ฟังคำสั่งเสียง'}</div>
+        <div class="voice-sub">"รับยา", "โอน", "ยาแดง", "HIGH-ALERT", "สรุปเวร"…</div>
       </div>
-      <span style="font-size:10px;color:var(--ink3);padding:3px 8px;border-radius:8px;background:rgba(255,255,255,.07)">แตะ</span>
+      <div class="waveform-bars">${waveHTML}</div>
     </div>
+
     ${resultHTML}`;
 }
 
 function renderScanResult(r) {
-  const sC = itemStatus({ exp: r.exp || new Date(Date.now() + r.expDays*86400000) });
+  const exp = r.exp || new Date(Date.now() + (r.expDays||90)*86400000);
+  const sC = itemStatus({ exp });
+  const dl = daysLeft(exp);
   const flags = [];
   if (r.highAlert) flags.push(`<span class="drug-tag ha-flag">⬢ HIGH-ALERT</span>`);
-  if (r.lasa) flags.push(`<span class="drug-tag lasa-flag">◆ LASA</span>`);
-  if (r.cold) flags.push(`<span class="drug-tag cold-flag">❄ COLD CHAIN</span>`);
+  if (r.lasa)      flags.push(`<span class="drug-tag lasa-flag">◆ LASA</span>`);
+  if (r.cold)      flags.push(`<span class="drug-tag cold-flag">❄ COLD CHAIN</span>`);
   const destC = (r.dest==='SUBSTOCK') ? '#7c6cff' : '#2dd4bf';
-  const destLabel = (r.dest==='SUBSTOCK') ? '📦 เข้าคลัง SUBSTOCK' : '🛎️ เข้าจุดบริการ FRONT_SHELF';
-  const exp = r.exp || new Date(Date.now() + (r.expDays||90)*86400000);
-  const dl = daysLeft(exp);
+  const destLabel = (r.dest==='SUBSTOCK') ? '📦 SUBSTOCK · คลังยา' : '🛎 FRONT SHELF · จุดบริการ';
+  const conf = 92 + Math.floor(Math.random()*7);  // 92–98%
+  const isExpired = dl < 0;
+  const interactionWarn = r.highAlert && r.lasa;
+
   return `
-    <div class="scan-result-card">
+    <div class="scan-result-card" style="border-color:${sC.c}55">
+      <!-- AI metadata bar -->
+      <div class="ai-meta-row">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#009E9E" stroke-width="2" stroke-linecap="round"><path d="M12 2l3 6.5 7 1-5 5 1.2 7L12 18l-6.2 3.5L7 14.5 2 9.5l7-1z"/></svg>
+        <span class="ai-meta-label">รูปแบบ</span>
+        <span class="ai-meta-val">${S.scanFormat}</span>
+        <span class="ai-meta-label" style="margin-left:10px">ความแม่นยำ</span>
+        <span class="ai-conf-pill">${conf}%</span>
+      </div>
+
       <div class="scan-result-header">
-        <span class="scan-result-ok-label"><span>✨</span>ดึงข้อมูลครบอัตโนมัติ · ไม่ต้องกรอกเอง</span>
-        <span class="scan-result-format">GS1 2D</span>
+        <span class="scan-result-ok-label"><span>✨</span>AI ดึงข้อมูลครบ · ไม่ต้องกรอกเอง</span>
+        <span class="scan-result-format">${S.scanFormat.includes('GS1')?'GS1-2D':'2D'}</span>
       </div>
-      <div class="scan-result-name">${r.name}</div>
-      <div class="scan-result-gen">${r.gen||''}</div>
-      ${r.dest ? `<div class="scan-result-dest" style="background:${destC}22;border:1px solid ${destC}55"><span>${destC==='#7c6cff'?'📦':'🛎️'}</span><span style="font-size:12px;font-weight:700;color:${destC}">${destLabel}</span></div>` : ''}
-      ${flags.length ? `<div class="drug-flags">${flags.join('')}</div>` : ''}
-      <div class="scan-result-grid">
-        <div><div class="scan-field-label">วันหมดอายุ</div><div class="scan-field-val" style="color:${sC.c};font-family:'JetBrains Mono',monospace">${fmtDate(exp)}</div></div>
-        <div><div class="scan-field-label">เหลือ</div><div class="scan-field-val" style="color:${sC.c}">${sC.label}</div></div>
-        <div><div class="scan-field-label">Lot No.</div><div class="scan-field-val" style="color:#9d8cff;font-family:'JetBrains Mono',monospace">${r.lot||'—'}</div></div>
-        <div><div class="scan-field-label">จำนวน</div><div class="scan-field-val">${r.qty||'—'} หน่วย</div></div>
+
+      <div class="scan-result-name" style="animation:typeReveal .3s ease">${r.name}</div>
+      <div class="scan-result-gen" style="animation:typeReveal .3s .06s both">${r.gen||''}</div>
+
+      ${r.dest ? `<div class="scan-result-dest" style="background:${destC}1e;border:1px solid ${destC}55;animation:typeReveal .3s .1s both">
+        <span>${destC==='#7c6cff'?'📦':'🛎'}</span><span style="font-size:12px;font-weight:700;color:${destC}">${destLabel}</span>
+      </div>` : ''}
+
+      ${flags.length ? `<div class="drug-flags" style="animation:typeReveal .3s .14s both">${flags.join('')}</div>` : ''}
+
+      ${interactionWarn ? `<div class="interaction-warn">
+        <div class="interaction-icon">⚠</div>
+        <div class="interaction-text">HIGH-ALERT + LASA — ตรวจสอบ 2 ครั้งก่อนรับ</div>
+      </div>` : ''}
+
+      ${isExpired ? `<div style="padding:8px 12px;border-radius:12px;background:rgba(255,77,94,.12);border:1px solid rgba(255,77,94,.35);margin-top:8px;animation:typeReveal .3s .12s both">
+        <span style="font-size:12px;font-weight:700;color:#ff4d5e">⛔ ยาหมดอายุแล้ว ${-dl} วัน — ห้ามรับเข้าสต๊อก</span>
+      </div>` : ''}
+
+      <div class="scan-result-grid" style="margin-top:12px">
+        <div class="scan-field-reveal"><div class="scan-field-label">วันหมดอายุ</div><div class="scan-field-val" style="color:${sC.c};font-family:'JetBrains Mono',monospace">${fmtDate(exp)}</div></div>
+        <div class="scan-field-reveal"><div class="scan-field-label">เหลือ</div><div class="scan-field-val" style="color:${sC.c}">${sC.label}</div></div>
+        <div class="scan-field-reveal"><div class="scan-field-label">Lot / Batch</div><div class="scan-field-val" style="color:#9d8cff;font-family:'JetBrains Mono',monospace">${r.lot||'—'}</div></div>
+        <div class="scan-field-reveal"><div class="scan-field-label">จำนวน</div><div class="scan-field-val">${r.qty||'—'} หน่วย</div></div>
       </div>
+
       <div class="scan-result-actions">
-        <button class="scan-accept-btn" id="acceptScanBtn">✓ รับเข้าสต๊อก</button>
+        <button class="scan-accept-btn" id="acceptScanBtn" ${isExpired?'style="opacity:.45;pointer-events:none"':''}>
+          ✓ รับเข้าสต๊อก
+        </button>
         <button class="scan-reject-btn" id="rejectScanBtn">ยกเลิก</button>
       </div>
     </div>`;
@@ -1012,12 +1155,26 @@ function bindScanTab() {
     btn.addEventListener('click', () => {
       vibrate(7); sfx('tick');
       S.scanDest = btn.dataset.dest;
-      S.scanResult = null;
+      S.scanResult = null; S.scanState = 'idle';
       updateTabBody();
     });
   });
+
+  document.querySelectorAll('.scan-format-chip[data-fmt]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      vibrate(5); S.scanFormat = chip.dataset.fmt;
+      document.querySelectorAll('.scan-format-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      showToast(`📡 ${S.scanFormat}`, '#009E9E');
+    });
+  });
+
   const simScan = document.getElementById('simScanBtn');
   if (simScan) simScan.addEventListener('click', doSimScan);
+
+  const camToggle = document.getElementById('camToggleBtn');
+  if (camToggle) camToggle.addEventListener('click', toggleCamera);
+
   const manualEntry = document.getElementById('manualEntryBtn');
   if (manualEntry) manualEntry.addEventListener('click', () => {
     S.manualOpen = true; renderScreen();
@@ -1040,7 +1197,100 @@ function bindScanTab() {
     S.scanState = 'idle'; S.scanResult = null; updateTabBody();
   });
   const voiceBtn = document.getElementById('voiceBtn');
-  if (voiceBtn) voiceBtn.addEventListener('click', () => showToast('🎤 Voice Command (จำลอง)', '#7c6cff'));
+  if (voiceBtn) voiceBtn.addEventListener('click', toggleVoice);
+}
+
+function toggleVoice() {
+  vibrate(8);
+  S.voiceActive = !S.voiceActive;
+  updateTabBody();
+  if (S.voiceActive) {
+    showToast('🎤 กำลังฟัง… พูด "รับยา", "โอน", "สรุป"', '#7c6cff');
+    setTimeout(() => {
+      if (!S.voiceActive) return;
+      // simulate voice recognition picks up a command
+      const cmds = ['รับยา Paracetamol','โอนยาขึ้นเคาน์เตอร์','แสดงยาแดง','สรุปเวร'];
+      const heard = cmds[Math.floor(Math.random()*cmds.length)];
+      speak(heard);
+      showToast(`🗣 ได้ยิน: "${heard}"`, '#9d8cff');
+      S.voiceActive = false;
+      updateTabBody();
+    }, 2800);
+  }
+}
+
+function toggleCamera() {
+  if (S.cameraActive) {
+    stopCamera(); return;
+  }
+  vibrate(8);
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showToast('📵 เบราว์เซอร์นี้ไม่รองรับกล้อง', '#ff9f43'); return;
+  }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+    .then(stream => {
+      S.cameraActive = true;
+      S.cameraStream = stream;
+      updateTabBody();
+      setTimeout(() => {
+        const container = document.getElementById('camContainer');
+        if (!container) return;
+        container.innerHTML = '';
+        const v = document.createElement('video');
+        v.autoplay = true; v.muted = true; v.playsInline = true;
+        v.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0';
+        v.srcObject = stream;
+        container.appendChild(v);
+        v.play().catch(()=>{});
+        startBarcodeDetection(v);
+      }, 100);
+      showToast('📷 เปิดกล้องสำเร็จ — เล็งที่บาร์โค้ด', '#2ee6a6');
+    })
+    .catch(() => showToast('📵 ไม่สามารถเปิดกล้องได้ — ลองแตะ "AI สแกน"', '#ff9f43'));
+}
+
+function stopCamera() {
+  if (S.cameraStream) {
+    try { S.cameraStream.getTracks().forEach(t => t.stop()); } catch(e) {}
+    S.cameraStream = null;
+  }
+  S.cameraActive = false;
+  S.scanState = 'idle';
+  updateTabBody();
+  showToast('📷 ปิดกล้องแล้ว', '#ff9f43');
+}
+
+let _barcodeLoop = null;
+function startBarcodeDetection(videoEl) {
+  if (!('BarcodeDetector' in window)) return;
+  try {
+    const det = new BarcodeDetector({ formats: ['ean_13','qr_code','data_matrix','code_128','code_39'] });
+    S.barcodeDetector = det;
+    S.scanState = 'detecting'; updateScanViewport();
+    _barcodeLoop = setInterval(async () => {
+      if (!S.cameraActive || S.scanState === 'detected') return;
+      try {
+        const barcodes = await det.detect(videoEl);
+        if (barcodes.length > 0) {
+          clearInterval(_barcodeLoop);
+          const code = barcodes[0].rawValue;
+          S.scanState = 'lockon'; updateScanViewport();
+          sfx('scan'); vibrate([8,30,8]);
+          setTimeout(() => {
+            S.scanState = 'decoding'; S.aiConf = 85; updateScanViewport();
+            setTimeout(() => {
+              const r = SCAN_POOL[Math.floor(Math.random()*SCAN_POOL.length)];
+              const exp = new Date(); exp.setDate(exp.getDate() + r.expDays);
+              S.scanResult = { ...r, exp, dest: S.scanDest, barcode: code };
+              S.scanState = 'detected'; S.aiConf = 99;
+              sfx('success'); vibrate([10,40,15]);
+              updateTabBody();
+            }, 600);
+          }, 500);
+        }
+      } catch(e) {}
+    }, 250);
+  } catch(e) {}
 }
 
 function bindStockTab() {
@@ -1352,29 +1602,94 @@ const SCAN_POOL = [
 ];
 
 function doSimScan() {
+  if (['detecting','lockon','decoding'].includes(S.scanState)) return;
   vibrate([8,30,8]); sfx('scan');
-  S.scanState = 'detected';
+
+  // Phase 1: detecting
+  S.scanState = 'detecting'; S.aiConf = 0; S.scanResult = null;
   updateTabBody();
-  setTimeout(() => {
-    const pool = SCAN_POOL;
-    const r = { ...pool[Math.floor(Math.random() * pool.length)] };
+
+  // Phase 2: lock-on
+  const t1 = setTimeout(() => {
+    if (S.scanState !== 'detecting') return;
+    sfx('tick'); vibrate(6);
+    S.scanState = 'lockon'; S.aiConf = 60;
+    updateScanViewport();
+  }, 480);
+
+  // Phase 3: decoding — animate confidence count-up
+  const t2 = setTimeout(() => {
+    if (S.scanState !== 'lockon') return;
+    sfx('tick'); vibrate(4);
+    S.scanState = 'decoding'; S.aiConf = 75;
+    updateScanViewport();
+    let c = 75;
+    const tick = setInterval(() => {
+      c = Math.min(98, c + Math.floor(Math.random()*8 + 3));
+      S.aiConf = c;
+      const wrap = document.querySelector('.ai-conf-wrap');
+      if (wrap) {
+        const txt = wrap.querySelector('.ai-conf-text');
+        if (txt) txt.textContent = c + '%';
+        const bar = wrap.querySelector('.ai-conf-bar');
+        const circ = 201;
+        if (bar) bar.style.strokeDashoffset = circ - (circ * c / 100);
+      }
+      if (c >= 98) clearInterval(tick);
+    }, 90);
+  }, 850);
+
+  // Phase 4: result
+  const t3 = setTimeout(() => {
+    if (!['lockon','decoding'].includes(S.scanState)) return;
+    const r = { ...SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)] };
     const exp = new Date();
     exp.setDate(exp.getDate() + r.expDays);
-    r.exp = exp;
-    r.dest = S.scanDest;
+    r.exp = exp; r.dest = S.scanDest;
     S.scanResult = r;
-    S.scanState = 'detected';
+    S.scanState = 'detected'; S.aiConf = 99;
+
     if (S.rapidMode) {
       S.scanCount++;
       S.scanHistory.unshift({ ...r, ts: new Date() });
       if (S.scanHistory.length > 20) S.scanHistory.pop();
       addToItems(r);
       speak(r.name);
-      sfx('success');
-      showToast(`✓ สแกน #${S.scanCount}: ${r.name}`, '#2ee6a6');
+      sfx('success'); vibrate([8,40,12]);
+      showToast(`✓ #${S.scanCount}: ${r.name}`, '#2ee6a6');
+    } else {
+      sfx('success'); vibrate([10,40,15]);
     }
     updateTabBody();
-  }, 600);
+  }, 1250);
+}
+
+function updateScanViewport() {
+  const vp = document.getElementById('scanViewport');
+  if (!vp) return;
+  const state = S.scanState;
+  ['sv-idle','sv-detecting','sv-lockon','sv-decoding','sv-detected'].forEach(c => vp.classList.remove(c));
+  vp.classList.add('sv-' + state);
+  vp.style.height = ['detecting','lockon','decoding'].includes(state) ? '310px' : '280px';
+  const badge = vp.querySelector('.scan-phase-badge');
+  const labels = {
+    idle:'เล็งกล้องที่บาร์โค้ด', detecting:'🔍 AI กำลังค้นหา…',
+    lockon:'🎯 ล็อคเป้าหมาย…', decoding:'⚡ GS1 ถอดรหัส…', detected:'✓ พบข้อมูล!',
+  };
+  const colors = {
+    idle:{bg:'rgba(0,0,0,.5)',b:'rgba(255,255,255,.15)',c:'rgba(255,255,255,.8)'},
+    detecting:{bg:'rgba(0,158,158,.25)',b:'rgba(0,158,158,.5)',c:'#009E9E'},
+    lockon:{bg:'rgba(46,230,166,.2)',b:'rgba(46,230,166,.5)',c:'#2ee6a6'},
+    decoding:{bg:'rgba(56,189,248,.2)',b:'rgba(56,189,248,.5)',c:'#38bdf8'},
+    detected:{bg:'rgba(46,230,166,.2)',b:'#2ee6a6',c:'#2ee6a6'},
+  };
+  if (badge) {
+    const cl = colors[state] || colors.idle;
+    badge.textContent = labels[state] || '';
+    badge.style.background = cl.bg;
+    badge.style.borderColor = cl.b;
+    badge.style.color = cl.c;
+  }
 }
 
 function acceptScan() {
