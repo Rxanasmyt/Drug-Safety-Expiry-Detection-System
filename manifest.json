@@ -1,0 +1,34 @@
+{
+  "name": "PharmaCare — Drug Safety System",
+  "short_name": "PharmaCare",
+  "description": "Drug Safety & Expiry Detection for Emergency Box Management",
+  "theme_color": "#2563EB",
+  "background_color": "#0C1A2E",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "start_url": "/",
+  "scope": "/",
+  "lang": "th",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "screenshots": [],
+  "categories": ["medical", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Emergency Box",
+      "short_name": "ER Box",
+      "description": "View Emergency Box drugs",
+      "url": "/?view=emergency",
+      "icons": [{ "src": "icons/icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Add Drug",
+      "short_name": "Add Drug",
+      "description": "Add a new drug to inventory",
+      "url": "/?action=add",
+      "icons": [{ "src": "icons/icon.svg", "sizes": "any" }]
+    }
+  ]
+}
