@@ -199,6 +199,7 @@ function renderScreen() {
     bindApp();
   }
   updateClock();
+  renderDesktopPanel();
 }
 
 // ── LOCK — PROFILE PICKER ─────────────────────────────
@@ -2165,6 +2166,97 @@ function initAutoLock() {
   }, 30000);
 }
 
+// ── PHONE SCALE (Desktop) ─────────────────────────────
+function fitPhoneToViewport() {
+  const phone = document.getElementById('pc-phone');
+  if (!phone) return;
+  if (window.innerWidth < 768) {
+    phone.style.transform = '';
+    phone.style.marginTop = '';
+    phone.style.marginBottom = '';
+    return;
+  }
+  const panelW = window.innerWidth >= 1440 ? 368 : 0; // 320 panel + 48 gap
+  const availW = window.innerWidth - 48 - panelW;
+  const availH = window.innerHeight - 48;
+  const scale = Math.min(availH / 880, availW / 412, 1);
+  if (scale < 0.99) {
+    phone.style.transform = `scale(${scale.toFixed(3)})`;
+    phone.style.transformOrigin = 'center center';
+    const margin = -Math.round((880 - 880 * scale) / 2);
+    phone.style.marginTop = margin + 'px';
+    phone.style.marginBottom = margin + 'px';
+  } else {
+    phone.style.transform = '';
+    phone.style.marginTop = '';
+    phone.style.marginBottom = '';
+  }
+}
+
+// ── DESKTOP INFO PANEL ────────────────────────────────
+function renderDesktopPanel() {
+  const root = document.getElementById('pc-root');
+  if (!root) return;
+  const existing = document.getElementById('desktop-panel');
+  if (window.innerWidth < 1440 || S.screen !== 'app') {
+    if (existing) existing.remove();
+    return;
+  }
+  const counts = { RED: 0, ORANGE: 0, YELLOW: 0, GREEN: 0 };
+  S.items.forEach(it => { const k = itemStatus(it).key; counts[k]++; });
+  const alerts = S.items
+    .filter(it => daysLeft(it.exp) <= 60)
+    .sort((a, b) => daysLeft(a.exp) - daysLeft(b.exp))
+    .slice(0, 5);
+  const alertRows = alerts.map(it => {
+    const st = itemStatus(it);
+    return `<div class="dp-alert-item">
+      <div style="width:8px;height:8px;border-radius:50%;background:${st.c};flex-shrink:0"></div>
+      <div>
+        <div class="dp-alert-name">${it.name}</div>
+        <div class="dp-alert-sub">${st.label} · Lot ${it.lot}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const html = `
+    <div class="dp-card">
+      <div class="dp-title">ภาพรวมระบบ</div>
+      <div class="dp-kpi-row">
+        <div class="dp-kpi">
+          <div class="dp-kpi-val" style="color:#ff4d5e">${counts.RED}</div>
+          <div class="dp-kpi-lbl">วิกฤต</div>
+        </div>
+        <div class="dp-kpi">
+          <div class="dp-kpi-val" style="color:#ff9f43">${counts.ORANGE}</div>
+          <div class="dp-kpi-lbl">ใกล้หมด</div>
+        </div>
+        <div class="dp-kpi">
+          <div class="dp-kpi-val" style="color:#ffd23f">${counts.YELLOW}</div>
+          <div class="dp-kpi-lbl">เฝ้าระวัง</div>
+        </div>
+        <div class="dp-kpi">
+          <div class="dp-kpi-val" style="color:#2ee6a6">${counts.GREEN}</div>
+          <div class="dp-kpi-lbl">ปลอดภัย</div>
+        </div>
+      </div>
+    </div>
+    ${alertRows ? `<div class="dp-card">
+      <div class="dp-title">แจ้งเตือนด่วน</div>
+      ${alertRows}
+    </div>` : ''}
+    <div class="dp-card dp-brand">
+      <div class="dp-brand-name">PharmaCare AI</div>
+      <div class="dp-brand-sub">รพ.กรงปินัง · Drug Safety System</div>
+    </div>`;
+  let panel = existing;
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'desktop-panel';
+    root.appendChild(panel);
+  }
+  panel.innerHTML = html;
+}
+
 // ── BOOTSTRAP ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(S.theme);
@@ -2177,6 +2269,12 @@ document.addEventListener('DOMContentLoaded', () => {
   renderScreen();
   initOfflineMonitor();
   initAutoLock();
+
+  fitPhoneToViewport();
+  window.addEventListener('resize', () => {
+    fitPhoneToViewport();
+    renderDesktopPanel();
+  }, { passive: true });
 
   // Try Firestore
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
