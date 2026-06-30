@@ -1614,6 +1614,7 @@ function doLogin(u) {
   S.loginStep = 'profiles'; S.pin = ''; S.faceStage = 'scanning';
   S.lastActivity = Date.now();
   renderScreen();
+  handoffListen();
   showToast(`ยินดีต้อนรับ ${u.name}`, u.color);
 }
 
@@ -1822,16 +1823,20 @@ function processBarcode(rawText, formatName) {
     S.scanResult = result;
     S.scanState = 'detected'; S.aiConf = 99;
 
+    const _st = itemStatus(result);
+    playScanChord(_st.key, result.highAlert);
+    handoffWrite(result, _st);
+
     if (S.rapidMode) {
       S.scanCount++;
       S.scanHistory.unshift({ ...result, ts: new Date() });
       if (S.scanHistory.length > 20) S.scanHistory.pop();
       addToItems(result);
       speak(result.name);
-      sfx('success'); vibrate([8,40,12]);
-      showToast(`✓ #${S.scanCount}: ${result.name}`, '#2ee6a6');
+      vibrate([8,40,12]);
+      showToast(`✓ #${S.scanCount}: ${result.name}`, _st.c);
     } else {
-      sfx('success'); vibrate([10,40,15]);
+      vibrate([10,40,15]);
     }
     updateTabBody();
   }, 1050);
@@ -2166,6 +2171,230 @@ function initAutoLock() {
   }, 30000);
 }
 
+// ── DATA SONIFICATION (Chord UX) ─────────────────────
+// Each drug status maps to a musical chord so staff can "hear" safety at a glance.
+// GREEN=C major (bright/resolved), YELLOW=A minor (cautious),
+// ORANGE=F diminished (tense), RED=half-diminished + bass rumble (urgent).
+function playScanChord(statusKey, highAlert) {
+  if (!S.settings.soundOn) return;
+  const ac = getAC(); if (!ac) return;
+  const t0 = ac.currentTime;
+  const chords = {
+    GREEN:  [[523.25,0],[659.25,0.02],[783.99,0.04]],
+    YELLOW: [[440,0],[523.25,0.02],[659.25,0.04]],
+    ORANGE: [[349.23,0],[415.30,0.02],[493.88,0.04]],
+    RED:    [[261.63,0],[311.13,0.02],[369.99,0.04],[440,0.06]],
+  };
+  const durs  = { GREEN:0.55, YELLOW:0.65, ORANGE:0.72, RED:0.85 };
+  const gains = { GREEN:0.15, YELLOW:0.14, ORANGE:0.14, RED:0.12 };
+  const notes = chords[statusKey] || chords.GREEN;
+  const dur = durs[statusKey] || 0.55;
+  const g0  = gains[statusKey] || 0.15;
+  notes.forEach(([freq, delay]) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = statusKey === 'RED' ? 'triangle' : 'sine';
+    o.frequency.setValueAtTime(freq, t0 + delay);
+    g.gain.setValueAtTime(0, t0 + delay);
+    g.gain.linearRampToValueAtTime(g0, t0 + delay + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t0 + delay); o.stop(t0 + delay + dur + 0.02);
+  });
+  if (statusKey === 'RED') {
+    const o2 = ac.createOscillator(), g2 = ac.createGain();
+    o2.type = 'sawtooth'; o2.frequency.setValueAtTime(62, t0);
+    g2.gain.setValueAtTime(0.07, t0);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.7);
+    o2.connect(g2); g2.connect(ac.destination);
+    o2.start(t0); o2.stop(t0 + 0.75);
+  }
+  if (highAlert) {
+    setTimeout(() => {
+      const ac2 = getAC(); if (!ac2) return;
+      const t = ac2.currentTime + 0.05;
+      const o3 = ac2.createOscillator(), g3 = ac2.createGain();
+      o3.type = 'sawtooth';
+      o3.frequency.setValueAtTime(700, t);
+      o3.frequency.linearRampToValueAtTime(1100, t + 0.14);
+      o3.frequency.linearRampToValueAtTime(700, t + 0.28);
+      g3.gain.setValueAtTime(0.17, t);
+      g3.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+      o3.connect(g3); g3.connect(ac2.destination);
+      o3.start(t); o3.stop(t + 0.35);
+    }, 640);
+  }
+}
+
+// ── CROSS-DEVICE HANDOFF (Firestore) ─────────────────
+const _handoffSid = Math.random().toString(36).slice(2, 10);
+let _handoffUnsub = null;
+
+function handoffWrite(item, status) {
+  if (typeof db === 'undefined' || !S.user) return;
+  try {
+    db.collection('handoff').doc(S.user.id).set({
+      userId: S.user.id, userName: S.user.name,
+      drugName: item.name, lot: item.lot || '',
+      statusKey: status.key, statusColor: status.c, statusLabel: status.label,
+      ts: firebase.firestore.FieldValue.serverTimestamp(),
+      sid: _handoffSid,
+    });
+  } catch(e) {}
+}
+
+function handoffListen() {
+  if (typeof db === 'undefined' || !S.user) return;
+  if (_handoffUnsub) { _handoffUnsub(); _handoffUnsub = null; }
+  try {
+    _handoffUnsub = db.collection('handoff').doc(S.user.id)
+      .onSnapshot(snap => {
+        const d = snap.data();
+        if (!d || d.sid === _handoffSid) return;
+        const tsMs = d.ts?.toDate ? d.ts.toDate().getTime() : 0;
+        if (Date.now() - tsMs > 25000) return;
+        showHandoffBar(d);
+      });
+  } catch(e) {}
+}
+
+function showHandoffBar(d) {
+  const phone = document.getElementById('pc-phone');
+  if (!phone) return;
+  let bar = document.getElementById('handoff-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'handoff-bar';
+    phone.appendChild(bar);
+  }
+  bar._hData = d;
+  bar.innerHTML = `
+    <div class="hb-pulse" style="background:${d.statusColor}"></div>
+    <div class="hb-text">
+      <span class="hb-main">กำลังสแกน <strong>${d.drugName}</strong> บนอุปกรณ์อื่น</span>
+      <span class="hb-sub">${d.statusLabel} · แตะเพื่อดูรายละเอียด</span>
+    </div>
+    <button class="hb-btn" onclick="handoffOpen()">เปิดดู</button>
+    <button class="hb-close" onclick="document.getElementById('handoff-bar').remove()">✕</button>`;
+  requestAnimationFrame(() => bar.classList.add('visible'));
+  clearTimeout(bar._t);
+  bar._t = setTimeout(() => {
+    bar.classList.remove('visible');
+    setTimeout(() => { const b = document.getElementById('handoff-bar'); if(b) b.remove(); }, 450);
+  }, 18000);
+}
+
+function handoffOpen() {
+  const bar = document.getElementById('handoff-bar');
+  if (!bar?._hData) return;
+  const d = bar._hData;
+  bar.remove();
+  const item = S.items.find(it => it.lot === d.lot) ||
+    { name: d.drugName, lot: d.lot, exp: new Date(Date.now() + 90*86400000), qty: 0, gen: '', loc: 'SUBSTOCK', highAlert: false, lasa: false, cold: false };
+  showDrugSheet(item);
+}
+
+// ── PREDICTIVE PREFETCH ────────────────────────────────
+const Prefetch = { camera: false, stock: false, dash: false };
+const _rIC = window.requestIdleCallback || (fn => setTimeout(fn, 100));
+
+function initPredictivePrefetch() {
+  document.addEventListener('pointermove', e => {
+    if (S.screen !== 'app') return;
+    const nav = document.getElementById('app-nav');
+    if (nav) {
+      nav.querySelectorAll('.nav-tab').forEach(tab => {
+        const r = tab.getBoundingClientRect();
+        const d = Math.hypot(e.clientX - (r.left + r.width/2), e.clientY - (r.top + r.height/2));
+        if (d < 90) prefetchTab(tab.dataset.tab, tab);
+      });
+    }
+    if (!Prefetch.camera) {
+      const camBtn = document.getElementById('camToggleBtn');
+      if (camBtn) {
+        const r = camBtn.getBoundingClientRect();
+        if (Math.hypot(e.clientX - (r.left + r.width/2), e.clientY - (r.top + r.height/2)) < 110)
+          prefetchCamera();
+      }
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (S.screen !== 'app' || !e.touches[0]) return;
+    const el = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+    const tab = el?.closest?.('.nav-tab');
+    if (tab) prefetchTab(tab.dataset.tab, tab);
+  }, { passive: true });
+}
+
+function prefetchTab(tabName, tabEl) {
+  if (tabName === 'scan' && !Prefetch.camera) { prefetchCamera(); return; }
+  if (tabName === 'stock' && !Prefetch.stock) {
+    Prefetch.stock = true;
+    _rIC(() => {
+      S._stockSorted = [...S.items].sort((a,b) => daysLeft(a.exp) - daysLeft(b.exp));
+      if (tabEl) markTabPrefetched(tabEl);
+    });
+  }
+  if (tabName === 'dash' && !Prefetch.dash) {
+    Prefetch.dash = true;
+    _rIC(() => {
+      const c = { RED:0, ORANGE:0, YELLOW:0, GREEN:0 };
+      S.items.forEach(it => c[itemStatus(it).key]++);
+      S._dashCounts = c;
+      if (tabEl) markTabPrefetched(tabEl);
+    });
+  }
+}
+
+function prefetchCamera() {
+  Prefetch.camera = true;
+  if (window.ZXing && !_zxingReader) {
+    try { _zxingReader = new ZXing.BrowserMultiFormatReader(null, { delayBetweenScanAttempts: 150 }); } catch(e) {}
+  }
+  const t = document.querySelector('.nav-tab[data-tab="scan"]');
+  if (t) markTabPrefetched(t);
+}
+
+function markTabPrefetched(tabEl) {
+  if (tabEl.dataset.prefetch === 'ready') return;
+  tabEl.dataset.prefetch = 'ready';
+  setTimeout(() => delete tabEl.dataset.prefetch, 3000);
+}
+
+// ── AMBIENT LIGHT SENSOR ──────────────────────────────
+function initAmbientLight() {
+  const root = document.getElementById('pc-root');
+  if (!root) return;
+  if ('AmbientLightSensor' in window) {
+    try {
+      navigator.permissions.query({ name: 'ambient-light-sensor' })
+        .then(perm => {
+          if (perm.state === 'denied') { ambientFallback(root); return; }
+          const sensor = new AmbientLightSensor({ frequency: 2 });
+          sensor.addEventListener('reading', () => applyAmbientClass(root, sensor.illuminance));
+          sensor.addEventListener('error', () => ambientFallback(root));
+          sensor.start();
+        }).catch(() => ambientFallback(root));
+    } catch(e) { ambientFallback(root); }
+  } else {
+    ambientFallback(root);
+  }
+}
+
+function applyAmbientClass(root, lux) {
+  root.classList.remove('ambient-dim', 'ambient-bright', 'ambient-glare');
+  if (lux < 20)        root.classList.add('ambient-dim');
+  else if (lux > 8000) root.classList.add('ambient-glare');
+  else if (lux > 1500) root.classList.add('ambient-bright');
+}
+
+function ambientFallback(root) {
+  const h = new Date().getHours();
+  root.classList.remove('ambient-dim', 'ambient-bright', 'ambient-glare');
+  if (h < 6 || h >= 21) root.classList.add('ambient-dim');
+  setTimeout(() => ambientFallback(root), 20 * 60 * 1000);
+}
+
 // ── PHONE SCALE (Desktop) ─────────────────────────────
 function fitPhoneToViewport() {
   const phone = document.getElementById('pc-phone');
@@ -2275,6 +2504,9 @@ document.addEventListener('DOMContentLoaded', () => {
     fitPhoneToViewport();
     renderDesktopPanel();
   }, { passive: true });
+
+  initPredictivePrefetch();
+  initAmbientLight();
 
   // Try Firestore
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
