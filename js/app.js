@@ -1333,9 +1333,11 @@ function toggleCamera() {
     const container = document.getElementById('camContainer');
     if (!container) { S.cameraActive = false; updateTabBody(); return; }
     container.innerHTML = '';
+    container.style.zIndex = '2'; // lift above scan-ai-grid (z:1) so video is visible
     const v = document.createElement('video');
     v.id = 'pc-scanvid'; v.autoplay = true; v.muted = true; v.playsInline = true;
-    v.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;border-radius:inherit';
+    v.setAttribute('playsinline', ''); // belt-and-suspenders for iOS Safari
+    v.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;border-radius:inherit;z-index:0';
     container.appendChild(v);
     startZXingScanner(v);
   }, 150);
@@ -1569,7 +1571,21 @@ function renderAppBody() {
 }
 
 function updateTabBody() {
-  renderAppBody();
+  if (S.cameraActive) {
+    // Save the live video element before the DOM rebuild wipes #camContainer
+    const savedVideo = document.getElementById('pc-scanvid');
+    renderAppBody();
+    const container = document.getElementById('camContainer');
+    if (container) {
+      container.style.zIndex = '2';
+      if (savedVideo && savedVideo.srcObject) {
+        container.innerHTML = '';
+        container.appendChild(savedVideo);
+      }
+    }
+  } else {
+    renderAppBody();
+  }
 }
 
 function updateNavTabs() {

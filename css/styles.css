@@ -1674,6 +1674,16 @@ body {
   border-radius: 22px;
   transition: height .4s cubic-bezier(.4,0,.2,1), box-shadow .4s;
 }
+/* Lift video container above AI grid (z:1) so the live feed is visible.
+   Laser beam (z:3) and reticle corners (z:4) remain on top of the video. */
+.scan-viewport.cam-active #camContainer {
+  z-index: 2 !important;
+}
+/* Hide the static striped background when live camera is on */
+.scan-viewport.cam-active .scan-vp-bg,
+.scan-viewport.cam-active .scan-barcode-bg {
+  display: none !important;
+}
 .scan-viewport.cam-active .scan-reticle {
   width: 220px !important;
   height: 190px !important;
