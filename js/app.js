@@ -702,7 +702,8 @@ function renderScanResult(r) {
   else                         { hIcon='✨'; hLabel='GS1 ดึงข้อมูลครบ · ไม่ต้องกรอกเอง'; }
 
   // Input style helper
-  const inp = `background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%`;
+  const inp = `background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%;box-sizing:border-box`;
+  const inpDate = `background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:8px 6px;font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--ink);width:100%;box-sizing:border-box`;
 
   return `
     <div class="scan-result-card" style="border-color:${needsExpiry?'#ff9f4355':'#009e9e55'}">
@@ -738,11 +739,11 @@ function renderScanResult(r) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:2px">
           <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ยาสิ้นอายุ *</div>
-            <input id="ean13Expiry" type="date" style="${inp};font-family:'JetBrains Mono',monospace">
+            <input id="ean13Expiry" type="date" style="${inpDate}">
           </div>
           <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">วันผลิต</div>
-            <input id="ean13Mfd" type="date" style="${inp};font-family:'JetBrains Mono',monospace">
+            <input id="ean13Mfd" type="date" style="${inpDate}">
           </div>
           <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ครั้งที่ผลิต / Lot</div>
@@ -1405,9 +1406,10 @@ async function handleOCRFile(file) {
     await worker.terminate();
     const parsed = parseOCRText(text);
     let filled = 0;
-    if (parsed.exp) { const el = document.getElementById('ean13Expiry'); if (el) { el.value = parsed.exp; filled++; } }
-    if (parsed.mfd) { const el = document.getElementById('ean13Mfd');    if (el) { el.value = parsed.mfd; filled++; } }
-    if (parsed.lot) { const el = document.getElementById('ean13Lot');    if (el && !el.value) { el.value = parsed.lot; filled++; } }
+    if (parsed.name) { const el = document.getElementById('newDrugName'); if (el && !el.value) { el.value = parsed.name; filled++; } }
+    if (parsed.exp)  { const el = document.getElementById('ean13Expiry'); if (el) { el.value = parsed.exp; filled++; } }
+    if (parsed.mfd)  { const el = document.getElementById('ean13Mfd');    if (el) { el.value = parsed.mfd; filled++; } }
+    if (parsed.lot)  { const el = document.getElementById('ean13Lot');    if (el && !el.value) { el.value = parsed.lot; filled++; } }
     if (filled > 0) {
       vibrate([8, 30, 8]); sfx('success');
       showToast(`✓ อ่านได้ ${filled} ช่อง — ตรวจสอบข้อมูลก่อนยืนยัน`, '#2ee6a6');
@@ -1464,6 +1466,22 @@ function parseOCRText(raw) {
   // Second pass: scan for inline patterns in case keyword and date are on same line
   if (!result.exp) { const m = text.match(/EXP\.?[:\s]*([^\n]{4,25})/i); if (m) { const d = toIso(m[1]); if (d) result.exp = d; } }
   if (!result.mfd) { const m = text.match(/MF[GD]\.?[:\s]*([^\n]{4,25})/i); if (m) { const d = toIso(m[1]); if (d) result.mfd = d; } }
+
+  // Drug name heuristic: first line that looks like a proper name (not a date/lot/noise line)
+  const skipPattern = /EXP|MFG|MFD|LOT|BATCH|L\/N|[\d]{4}|mg|ml|mcg|IU|^\s*$/i;
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.length < 4 || skipPattern.test(t)) continue;
+    // Prefer English drug name (title-case or ALL-CAPS word sequence)
+    if (/[A-Za-z]{3}/.test(t)) { result.name = t; break; }
+  }
+  // Fallback: first Thai line
+  if (!result.name) {
+    for (const line of lines) {
+      const t = line.trim();
+      if (t.length >= 4 && /[฀-๿]{3}/.test(t) && !skipPattern.test(t)) { result.name = t; break; }
+    }
+  }
 
   return result;
 }
@@ -2292,6 +2310,7 @@ function showDrugSheet(it) {
         </div>
         <div class="detail-field">
           <div class="detail-item"><div class="detail-item-label">LOT NO.</div><div class="detail-item-val" style="font-family:'JetBrains Mono',monospace;color:#9d8cff">${it.lot}</div></div>
+          ${it.mfd ? `<div class="detail-item"><div class="detail-item-label">วันผลิต</div><div class="detail-item-val" style="font-family:'JetBrains Mono',monospace">${fmtDate(it.mfd)}</div></div>` : ''}
           <div class="detail-item"><div class="detail-item-label">จำนวน</div><div class="detail-item-val">${it.qty} หน่วย</div></div>
           <div class="detail-item"><div class="detail-item-label">ตำแหน่ง</div><div class="detail-item-val">${it.loc==='FRONT_SHELF'?'🛎 หน้าเคาน์เตอร์':'📦 คลัง'}</div></div>
           <div class="detail-item"><div class="detail-item-label">อายุสต๊อก</div><div class="detail-item-val">${it.age} วัน</div></div>
