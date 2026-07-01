@@ -37,27 +37,7 @@ const S = {
 };
 
 // ── SEED DATA ─────────────────────────────────────────
-const SEED_ITEMS = [
-  { id:'i1', name:'Adrenaline 1mg/mL', gen:'Epinephrine inj.', lot:'A2291', expDays:12, qty:8, loc:'FRONT_SHELF', highAlert:true, lasa:false, cold:false, age:14, form:'vial' },
-  { id:'i2', name:'Warfarin 5mg', gen:'Warfarin sodium', lot:'WF8830', expDays:64, qty:3, loc:'FRONT_SHELF', highAlert:true, lasa:true, cold:false, age:103, form:'tab' },
-  { id:'i3', name:'Insulin Glargine', gen:'Lantus 100IU/mL', lot:'LZ4471', expDays:120, qty:5, loc:'FRONT_SHELF', highAlert:false, lasa:false, cold:true, age:9, form:'pen' },
-  { id:'i4', name:'Hydralazine 25mg', gen:'Hydralazine HCl', lot:'HY1190', expDays:45, qty:20, loc:'FRONT_SHELF', highAlert:false, lasa:true, cold:false, age:31, form:'tab' },
-  { id:'i5', name:'Paracetamol 500mg', gen:'Acetaminophen', lot:'PC0021', expDays:310, qty:60, loc:'SUBSTOCK', highAlert:false, lasa:false, cold:false, age:6, form:'tab' },
-  { id:'i6', name:'Amoxicillin 500mg', gen:'Amoxicillin', lot:'AM5521', expDays:82, qty:40, loc:'SUBSTOCK', highAlert:false, lasa:false, cold:false, age:120, form:'cap' },
-  { id:'i7', name:'Vincristine 1mg', gen:'Vincristine sulfate', lot:'VC0093', expDays:28, qty:2, loc:'SUBSTOCK', highAlert:true, lasa:true, cold:true, age:40, form:'vial' },
-  { id:'i8', name:'Metformin 850mg', gen:'Metformin HCl', lot:'MF7740', expDays:-3, qty:12, loc:'SUBSTOCK', highAlert:false, lasa:false, cold:false, age:55, form:'tab' },
-  { id:'i9', name:'Paracetamol 500mg', gen:'Acetaminophen', lot:'PC0044', expDays:70, qty:25, loc:'SUBSTOCK', highAlert:false, lasa:false, cold:false, age:20, form:'tab' },
-  { id:'i10', name:'Paracetamol 500mg', gen:'Acetaminophen', lot:'PC0098', expDays:150, qty:48, loc:'SUBSTOCK', highAlert:false, lasa:false, cold:false, age:12, form:'tab' },
-  { id:'i11', name:'Warfarin 5mg', gen:'Warfarin sodium', lot:'WF9001', expDays:200, qty:15, loc:'FRONT_SHELF', highAlert:true, lasa:true, cold:false, age:18, form:'tab' },
-];
-
-function makeItems() {
-  return SEED_ITEMS.map(i => {
-    const exp = new Date();
-    exp.setDate(exp.getDate() + i.expDays);
-    return { ...i, exp };
-  });
-}
+// ข้อมูลจริงมาจาก Firestore เท่านั้น — ไม่มีข้อมูลทดลองหรือข้อมูลที่สร้างขึ้นเอง
 
 // ── HELPERS ───────────────────────────────────────────
 function daysLeft(exp) {
@@ -1234,6 +1214,7 @@ function bindApp() {
   document.querySelectorAll('.nav-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
+      if (S.cameraActive && btn.dataset.tab !== 'scan') stopCamera();
       S.tab = btn.dataset.tab;
       renderAppBody(); updateNavTabs();
     });
@@ -1336,17 +1317,10 @@ function toggleVoice() {
   S.voiceActive = !S.voiceActive;
   updateTabBody();
   if (S.voiceActive) {
-    showToast('🎤 กำลังฟัง… พูด "รับยา", "โอน", "สรุป"', '#7c6cff');
+    showToast('🎤 Voice Command ยังไม่รองรับในรุ่นนี้ — ใช้ปุ่มกรอกบาร์โค้ดแทน', '#7c6cff');
     setTimeout(() => {
-      if (!S.voiceActive) return;
-      // simulate voice recognition picks up a command
-      const cmds = ['รับยา Paracetamol','โอนยาขึ้นเคาน์เตอร์','แสดงยาแดง','สรุปเวร'];
-      const heard = cmds[Math.floor(Math.random()*cmds.length)];
-      speak(heard);
-      showToast(`🗣 ได้ยิน: "${heard}"`, '#9d8cff');
-      S.voiceActive = false;
-      updateTabBody();
-    }, 2800);
+      if (S.voiceActive) { S.voiceActive = false; updateTabBody(); }
+    }, 3000);
   }
 }
 
@@ -1382,6 +1356,7 @@ function stopCamera() {
     try { S.cameraStream.getTracks().forEach(t => t.stop()); } catch(e) {}
     S.cameraStream = null;
   }
+  _lastScanMs = 0;
   S.cameraActive = false;
   S.scanState = 'idle';
   updateTabBody();
@@ -1390,12 +1365,13 @@ function stopCamera() {
 
 let _barcodeLoop = null;
 let _zxingReader = null;
+let _lastScanMs = 0;
 
 function _zxingHints() {
   if (!window.ZXing) return null;
   try {
     const fmt = ZXing.BarcodeFormat;
-    const hints = new Map([
+    return new Map([
       [ZXing.DecodeHintType.POSSIBLE_FORMATS, [
         fmt.EAN_13, fmt.EAN_8,
         fmt.CODE_128, fmt.CODE_39,
@@ -1405,92 +1381,75 @@ function _zxingHints() {
       ]],
       [ZXing.DecodeHintType.TRY_HARDER, true],
     ]);
-    return hints;
   } catch(e) { return null; }
 }
 
-function _onZXingResult(result, err) {
-  if (!result || !S.cameraActive) return;
+// Shared debounced barcode handler — called by both BarcodeDetector and ZXing
+function _onBarcode(raw, fmt) {
+  const now = Date.now();
+  if (now - _lastScanMs < 1500) return;
   if (['lockon','decoding','detected'].includes(S.scanState)) return;
-  try {
-    processBarcode(result.getText(), result.getBarcodeFormat().toString());
-  } catch(e) { console.warn('processBarcode:', e); }
+  if (!S.cameraActive) return;
+  _lastScanMs = now;
+  try { processBarcode(raw, fmt); } catch(e) { console.warn('processBarcode:', e); }
 }
 
-function startBarcodeDetection(videoEl) {
-  // BarcodeDetector (Chrome desktop/Android)
-  if ('BarcodeDetector' in window) {
-    try {
-      const det = new BarcodeDetector({ formats: ['ean_13','ean_8','qr_code','data_matrix','code_128','code_39','aztec','pdf_417','upc_a','upc_e','itf'] });
-      S.barcodeDetector = det;
-      S.scanState = 'detecting'; updateScanViewport();
-      _barcodeLoop = setInterval(async () => {
-        if (!S.cameraActive || ['lockon','decoding','detected'].includes(S.scanState)) return;
-        try {
-          const codes = await det.detect(videoEl);
-          if (codes.length > 0) {
-            clearInterval(_barcodeLoop); _barcodeLoop = null;
-            processBarcode(codes[0].rawValue, codes[0].format);
-          }
-        } catch(e) {}
-      }, 250);
-      return;
-    } catch(e) {}
-  }
-  // Fallback: ZXing decode loop on existing stream (Safari / Firefox)
-  if (window.ZXing && videoEl.srcObject) {
-    try {
-      if (_zxingReader) { try { _zxingReader.reset(); } catch(e) {} }
-      _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 300 });
-      _zxingReader.decodeFromStream(videoEl.srcObject, videoEl, _onZXingResult);
-      S.scanState = 'detecting'; updateScanViewport();
-      return;
-    } catch(e) { console.warn('ZXing stream fallback:', e); }
-  }
-  // Last resort: show active state and let user try manual entry
-  S.scanState = 'detecting'; updateScanViewport();
-  showToast('⚠ บราวเซอร์นี้สแกนอัตโนมัติไม่ได้ — ลองกรอกบาร์โค้ดเอง', '#ff9f43');
-}
-
+// Open camera via getUserMedia, then run both BarcodeDetector + ZXing in parallel
 function startZXingScanner(videoEl) {
-  if (!window.ZXing) { startLegacyCamera(videoEl); return; }
-  try {
-    if (_zxingReader) { try { _zxingReader.reset(); } catch(e) {} _zxingReader = null; }
-    _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 300 });
-    _zxingReader.decodeFromConstraints(
-      { audio: false, video: { facingMode: { ideal: 'environment' } } },
-      videoEl,
-      _onZXingResult
-    ).then(() => {
-      S.scanState = 'detecting'; updateScanViewport();
-      showToast('📷 กล้องพร้อม — เล็งบาร์โค้ดให้อยู่ในกรอบ', '#2ee6a6');
-    }).catch(e => {
-      console.warn('ZXing decodeFromConstraints:', e);
-      _zxingReader = null;
-      startLegacyCamera(videoEl);
-    });
-  } catch(e) {
-    console.warn('ZXing init:', e);
-    _zxingReader = null;
-    startLegacyCamera(videoEl);
-  }
-}
-
-function startLegacyCamera(videoEl) {
-  const constraints = { audio: false, video: { facingMode: { ideal: 'environment' } } };
+  const constraints = {
+    audio: false,
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  };
   navigator.mediaDevices.getUserMedia(constraints)
     .then(stream => {
       S.cameraStream = stream;
       videoEl.srcObject = stream;
-      videoEl.play().catch(() => {});
-      startBarcodeDetection(videoEl);
+      return videoEl.play().catch(() => {});
+    })
+    .then(() => {
+      S.scanState = 'detecting'; updateScanViewport();
       showToast('📷 กล้องพร้อม — เล็งบาร์โค้ดให้อยู่ในกรอบ', '#2ee6a6');
+      _startAllDetectors(videoEl);
     })
     .catch(err => {
-      console.warn('getUserMedia:', err);
+      console.warn('Camera open:', err);
       S.cameraActive = false; updateTabBody();
       showToast('📵 ไม่สามารถเปิดกล้องได้ — กรุณาอนุญาตสิทธิ์กล้อง', '#ff4d5e');
     });
+}
+
+function _startAllDetectors(videoEl) {
+  // Method 1: BarcodeDetector API — native, fast, reliable for EAN-13 (Chrome/Android)
+  if ('BarcodeDetector' in window) {
+    try {
+      const det = new BarcodeDetector({
+        formats: ['ean_13','ean_8','qr_code','data_matrix','code_128','code_39','aztec','pdf_417','itf'],
+      });
+      if (_barcodeLoop) clearInterval(_barcodeLoop);
+      _barcodeLoop = setInterval(async () => {
+        if (!S.cameraActive) { clearInterval(_barcodeLoop); _barcodeLoop = null; return; }
+        try {
+          const codes = await det.detect(videoEl);
+          if (codes.length > 0) _onBarcode(codes[0].rawValue, codes[0].format);
+        } catch(e) {}
+      }, 200);
+    } catch(e) { console.warn('BarcodeDetector init:', e); }
+  }
+
+  // Method 2: ZXing decodeFromStream — cross-browser fallback (iOS Safari, Firefox)
+  if (window.ZXing && videoEl.srcObject) {
+    try {
+      if (_zxingReader) { try { _zxingReader.reset(); } catch(e) {} _zxingReader = null; }
+      _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 250 });
+      _zxingReader.decodeFromStream(videoEl.srcObject, videoEl, (result, err) => {
+        if (result && S.cameraActive) _onBarcode(result.getText(), result.getBarcodeFormat().toString());
+      });
+    } catch(e) { console.warn('ZXing decodeFromStream:', e); }
+  }
+
+  if (!('BarcodeDetector' in window) && !window.ZXing) {
+    showToast('⚠ บราวเซอร์นี้สแกนอัตโนมัติไม่ได้ — ลองกรอกบาร์โค้ดเอง', '#ff9f43');
+  }
 }
 
 function bindStockTab() {
@@ -1661,6 +1620,7 @@ function updateNavTabs() {
   nav.querySelectorAll('.nav-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
+      if (S.cameraActive && btn.dataset.tab !== 'scan') stopCamera();
       S.tab = btn.dataset.tab; S.sheet = null;
       renderAppBody(); updateNavTabs();
     });
@@ -1900,27 +1860,39 @@ function parseGS1Expiry(yymmdd) {
 }
 
 function buildResultFromGS1(gs1, rawText) {
-  const lot = gs1['10'] || ('SCN' + Date.now().toString().slice(-5));
-  const qty = gs1['37'] ? Math.max(1, parseInt(gs1['37'])) : 1;
-  const gtin = gs1['01'] || '';
-  const expDate = gs1['17'] ? (parseGS1Expiry(gs1['17']) || new Date(Date.now() + 90*86400000))
-    : new Date(Date.now() + 90*86400000);
+  const lot   = gs1['10'] || '';
+  const qty   = gs1['37'] ? Math.max(1, parseInt(gs1['37'])) : 1;
+  const gtin  = gs1['01'] || '';
+  const expDate = gs1['17'] ? parseGS1Expiry(gs1['17']) : null;
+  const needsExpiry = !expDate;
 
   // Match lot number against inventory
-  const byLot = S.items.find(i => i.lot === lot);
-  if (byLot) return { ...byLot, qty: byLot.qty + qty, dest: S.scanDest, exp: expDate, barcode: rawText, gs1 };
+  if (lot) {
+    const byLot = S.items.find(i => i.lot === lot);
+    if (byLot) return {
+      ...byLot, qty: byLot.qty + qty, dest: S.scanDest,
+      ...(expDate ? { exp: expDate } : { needsExpiry: true }),
+      barcode: rawText, gs1,
+    };
+  }
 
   // Match GTIN against inventory
   if (gtin) {
-    const byGtin = S.items.find(i => i.gtin === gtin || (i.lot && gtin.endsWith(i.lot)));
-    if (byGtin) return { ...byGtin, lot, qty, dest: S.scanDest, exp: expDate, barcode: rawText, gs1 };
+    const byGtin = S.items.find(i => i.gtin === gtin);
+    if (byGtin) return {
+      ...byGtin, lot, qty, dest: S.scanDest,
+      ...(expDate ? { exp: expDate } : { needsExpiry: true }),
+      barcode: rawText, gs1,
+    };
   }
 
-  // New drug not in system — return GS1 data only, require user to enter drug name
+  // New drug — require name + expiry from user
   return {
-    name: '', gen: '', lot, qty, exp: expDate,
+    name: '', gen: '', lot, qty,
+    exp: expDate || null,
     dest: S.scanDest, highAlert: false, lasa: false, cold: false,
     barcode: rawText, gs1, gtin, _fromScan: true, isNew: true,
+    needsExpiry,
   };
 }
 
@@ -2040,6 +2012,15 @@ function processBarcode(rawText, formatName) {
       vibrate([10,40,15]);
     }
     updateTabBody();
+    // Scroll result card into view and focus first required input
+    requestAnimationFrame(() => {
+      const card = document.querySelector('.scan-result-card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setTimeout(() => {
+        const firstInput = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
+        if (firstInput) firstInput.focus();
+      }, 350);
+    });
   }, 1050);
 }
 
@@ -2136,15 +2117,20 @@ function acceptScan() {
 function addToItems(r) {
   const exp = r.exp || new Date(Date.now() + (r.expDays||90)*86400000);
   const loc = r.dest || 'SUBSTOCK';
-  const existing = S.items.find(i => i.lot === r.lot && i.name === r.name);
+  const existing = S.items.find(i =>
+    (r.lot && i.lot === r.lot && i.name === r.name) ||
+    (r.gtin && i.gtin === r.gtin && r.lot && i.lot === r.lot)
+  );
   if (existing) {
     existing.qty += (r.qty || 1);
+    if (r.exp) existing.exp = r.exp;
   } else {
     S.items.unshift({
       id: 'scan-' + Date.now(),
-      name: r.name, gen: r.gen||'', lot: r.lot, exp, qty: r.qty||1,
+      name: r.name, gen: r.gen||'', lot: r.lot||'', exp, qty: r.qty||1,
       loc, highAlert: !!r.highAlert, lasa: !!r.lasa, cold: !!r.cold, age: 0,
       form: r.cold ? 'pen' : r.highAlert ? 'vial' : 'tab',
+      gtin: r.gtin || '',
     });
   }
 }
@@ -2268,6 +2254,7 @@ function initFirestore() {
           cold: (d.storage||'').includes('2–8'),
           age: 0,
           form: (d.unit||'').includes('vial') ? 'vial' : (d.unit||'').includes('capsule') ? 'cap' : 'tab',
+          gtin: d.gtin || '',
           _fromFirestore: true,
         };
       });
@@ -2280,20 +2267,6 @@ function initFirestore() {
     });
 }
 
-async function seedFirestore() {
-  if (typeof drugsRef === 'undefined' || typeof db === 'undefined') return;
-  try {
-    const batch = db.batch();
-    const seeds = [
-      { name:'Paracetamol 500mg', generic:'Acetaminophen', batch:'PC0021', expiry:'2027-06-01', stock:60, unit:'tablets', cat:'Analgesic', storage:'Room Temperature (15–25°C)', isEmergency:false, minStock:0, loc:'SUBSTOCK' },
-      { name:'Adrenaline 1mg/mL', generic:'Epinephrine', batch:'A2291', expiry:(() => { const d=new Date(); d.setDate(d.getDate()+12); return d.toISOString().slice(0,10); })(), stock:8, unit:'vials', cat:'Emergency', storage:'Protected from Light', isEmergency:true, minStock:5, loc:'FRONT_SHELF' },
-      { name:'Warfarin 5mg', generic:'Warfarin sodium', batch:'WF8830', expiry:(() => { const d=new Date(); d.setDate(d.getDate()+64); return d.toISOString().slice(0,10); })(), stock:3, unit:'tablets', cat:'Cardiovascular', storage:'Room Temperature (15–25°C)', isEmergency:true, minStock:10, loc:'FRONT_SHELF' },
-    ];
-    seeds.forEach(s => batch.set(drugsRef.doc(), { ...s, createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
-    await batch.commit();
-  } catch(e) { console.warn('Seed error:', e); }
-}
-
 async function saveToFirestore(item) {
   if (typeof drugsRef === 'undefined') return;
   try {
@@ -2303,6 +2276,7 @@ async function saveToFirestore(item) {
       stock: item.qty||0, unit: 'units', loc: item.loc||'SUBSTOCK',
       isEmergency: !!item.highAlert, minStock: 0, cat: 'Other',
       storage: item.cold ? 'Refrigerated (2–8°C)' : 'Room Temperature (15–25°C)',
+      gtin: item.gtin || '',
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await drugsRef.add(data);
@@ -2847,7 +2821,7 @@ function prefetchTab(tabName, tabEl) {
 function prefetchCamera() {
   Prefetch.camera = true;
   if (window.ZXing && !_zxingReader) {
-    try { _zxingReader = new ZXing.BrowserMultiFormatReader(null, { delayBetweenScanAttempts: 150 }); } catch(e) {}
+    try { _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 250 }); } catch(e) {}
   }
   const t = document.querySelector('.nav-tab[data-tab="scan"]');
   if (t) markTabPrefetched(t);
@@ -2987,7 +2961,7 @@ function renderDesktopPanel() {
 // ── BOOTSTRAP ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(S.theme);
-  S.items = makeItems();
+  // S.items starts empty — data comes from Firestore only
 
   // Status bar clock
   setInterval(updateClock, 10000);
