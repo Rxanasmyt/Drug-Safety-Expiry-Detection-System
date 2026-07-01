@@ -700,76 +700,98 @@ function renderScanTab() {
 }
 
 function renderScanResult(r) {
-  const exp = r.exp || new Date(Date.now() + (r.expDays||90)*86400000);
-  const sC = itemStatus({ exp });
-  const dl = daysLeft(exp);
+  const needsExpiry = !!r.needsExpiry;
+  const exp = needsExpiry ? null : (r.exp || null);
+  const sC = exp ? itemStatus({ exp }) : { c:'#009E9E', label:'รอระบุ', key:'GREEN' };
+  const dl  = exp ? daysLeft(exp) : 999;
+  const isExpired = dl < 0;
+
   const flags = [];
   if (r.highAlert) flags.push(`<span class="drug-tag ha-flag">⬢ HIGH-ALERT</span>`);
   if (r.lasa)      flags.push(`<span class="drug-tag lasa-flag">◆ LASA</span>`);
   if (r.cold)      flags.push(`<span class="drug-tag cold-flag">❄ COLD CHAIN</span>`);
   const destC = (r.dest==='SUBSTOCK') ? '#7c6cff' : '#2dd4bf';
   const destLabel = (r.dest==='SUBSTOCK') ? '📦 SUBSTOCK · คลังยา' : '🛎 FRONT SHELF · จุดบริการ';
-  const conf = 92 + Math.floor(Math.random()*7);  // 92–98%
-  const isExpired = dl < 0;
   const interactionWarn = r.highAlert && r.lasa;
 
+  // Header label based on scan type
+  let hIcon, hLabel;
+  if (needsExpiry && r.isNew)  { hIcon='⚠';  hLabel='ยาใหม่ในระบบ — กรอกข้อมูลเพิ่มเติม'; }
+  else if (needsExpiry)        { hIcon='📦'; hLabel=`${r.name} — กรอกวันหมดอายุล็อตนี้`; }
+  else if (r.isNew)            { hIcon='⚠';  hLabel='ยาใหม่ — กรุณาระบุชื่อยา'; }
+  else                         { hIcon='✨'; hLabel='GS1 ดึงข้อมูลครบ · ไม่ต้องกรอกเอง'; }
+
+  // Input style helper
+  const inp = `background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%`;
+
   return `
-    <div class="scan-result-card" style="border-color:${sC.c}55">
-      <!-- AI metadata bar -->
+    <div class="scan-result-card" style="border-color:${needsExpiry?'#ff9f4355':'#009e9e55'}">
+      <!-- Barcode row -->
       <div class="ai-meta-row">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#009E9E" stroke-width="2" stroke-linecap="round"><path d="M12 2l3 6.5 7 1-5 5 1.2 7L12 18l-6.2 3.5L7 14.5 2 9.5l7-1z"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#009E9E" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 4v5M12 4v5M17 4v5"/></svg>
         <span class="ai-meta-label">รูปแบบ</span>
         <span class="ai-meta-val">${S.scanFormat}</span>
-        <span class="ai-meta-label" style="margin-left:10px">ความแม่นยำ</span>
-        <span class="ai-conf-pill">${conf}%</span>
+        ${r.barcode || r.gtin ? `<span class="gs1-gtin" style="margin-left:auto;font-size:10px">${(r.gtin||r.barcode).slice(0,16)}</span>` : ''}
       </div>
 
       <div class="scan-result-header">
-        <span class="scan-result-ok-label"><span>${r.isNew?'⚠':'✨'}</span>${r.isNew?'ยาใหม่ — กรุณาระบุชื่อ':'GS1 ดึงข้อมูลครบ · ไม่ต้องกรอกเอง'}</span>
-        <span class="scan-result-format">${S.scanFormat.includes('GS1')?'GS1-2D':'2D'}</span>
+        <span class="scan-result-ok-label"><span>${hIcon}</span>${hLabel}</span>
       </div>
 
-      ${r.isNew ? `
-      <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px;animation:typeReveal .3s ease">
-        <input id="newDrugName" placeholder="ชื่อยา (จำเป็น)..." value=""
-          style="background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%">
-        <input id="newDrugGen" placeholder="Generic / ชื่อสามัญ..."  value=""
-          style="background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%">
+      <!-- Drug name: editable if new, read-only if known -->
+      ${(r.isNew || needsExpiry) ? `
+      <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:2px;animation:typeReveal .3s ease">
+        ${r.isNew ? `
+        <input id="newDrugName" placeholder="ชื่อยา (จำเป็น)..." value="${r.name||''}"
+          style="${inp}">
+        <input id="newDrugGen" placeholder="Generic / ชื่อสามัญ (ถ้ามี)..." value="${r.gen||''}"
+          style="${inp}">` : `
+        <div class="scan-result-name" style="animation:typeReveal .3s ease">${r.name}</div>
+        <div class="scan-result-gen">${r.gen||''}</div>`}
+
+        <!-- Expiry + Lot inputs — always required for EAN-13 -->
+        ${needsExpiry ? `
+        <div style="font-size:11px;color:#ff9f43;font-weight:700;margin-top:6px">ยาไทย (EAN-13) ต้องกรอกวันหมดอายุเองเสมอ</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+          <div>
+            <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ยาสิ้นอายุ *</div>
+            <input id="ean13Expiry" type="date" style="${inp};font-family:'JetBrains Mono',monospace">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ครั้งที่ผลิต / Lot</div>
+            <input id="ean13Lot" placeholder="เช่น ST68-6470" style="${inp}">
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">จำนวน (หน่วย)</div>
+          <input id="ean13Qty" type="number" min="1" placeholder="1" style="${inp};width:100px">
+        </div>` : ''}
       </div>` : `
       <div class="scan-result-name" style="animation:typeReveal .3s ease">${r.name}</div>
       <div class="scan-result-gen" style="animation:typeReveal .3s .06s both">${r.gen||''}</div>`}
 
-      ${r.dest ? `<div class="scan-result-dest" style="background:${destC}1e;border:1px solid ${destC}55;animation:typeReveal .3s .1s both">
+      ${r.dest ? `<div class="scan-result-dest" style="background:${destC}1e;border:1px solid ${destC}55;animation:typeReveal .3s .1s both;margin-top:8px">
         <span>${destC==='#7c6cff'?'📦':'🛎'}</span><span style="font-size:12px;font-weight:700;color:${destC}">${destLabel}</span>
       </div>` : ''}
 
       ${flags.length ? `<div class="drug-flags" style="animation:typeReveal .3s .14s both">${flags.join('')}</div>` : ''}
+      ${interactionWarn ? `<div class="interaction-warn"><div class="interaction-icon">⚠</div><div class="interaction-text">HIGH-ALERT + LASA — ตรวจสอบ 2 ครั้งก่อนรับ</div></div>` : ''}
 
-      ${interactionWarn ? `<div class="interaction-warn">
-        <div class="interaction-icon">⚠</div>
-        <div class="interaction-text">HIGH-ALERT + LASA — ตรวจสอบ 2 ครั้งก่อนรับ</div>
-      </div>` : ''}
-
-      ${isExpired ? `<div style="padding:8px 12px;border-radius:12px;background:rgba(255,77,94,.12);border:1px solid rgba(255,77,94,.35);margin-top:8px;animation:typeReveal .3s .12s both">
+      ${!needsExpiry && isExpired ? `<div style="padding:8px 12px;border-radius:12px;background:rgba(255,77,94,.12);border:1px solid rgba(255,77,94,.35);margin-top:8px">
         <span style="font-size:12px;font-weight:700;color:#ff4d5e">⛔ ยาหมดอายุแล้ว ${-dl} วัน — ห้ามรับเข้าสต๊อก</span>
       </div>` : ''}
 
+      ${!needsExpiry ? `
       <div class="scan-result-grid" style="margin-top:12px">
         <div class="scan-field-reveal"><div class="scan-field-label">วันหมดอายุ</div><div class="scan-field-val" style="color:${sC.c};font-family:'JetBrains Mono',monospace">${fmtDate(exp)}</div></div>
         <div class="scan-field-reveal"><div class="scan-field-label">เหลือ</div><div class="scan-field-val" style="color:${sC.c}">${sC.label}</div></div>
         <div class="scan-field-reveal"><div class="scan-field-label">Lot / Batch</div><div class="scan-field-val" style="color:#9d8cff;font-family:'JetBrains Mono',monospace">${r.lot||'—'}</div></div>
         <div class="scan-field-reveal"><div class="scan-field-label">จำนวน</div><div class="scan-field-val">${r.qty||'—'} หน่วย</div></div>
-      </div>
-
-      ${r.gs1?.['01'] || r.barcode ? `<div class="gs1-raw-row" style="animation:typeReveal .3s .28s both">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9d8cff" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 4v5M12 4v5M17 4v5"/></svg>
-        ${r.gs1?.['01'] ? `<span class="gs1-gtin">GTIN·${r.gs1['01']}</span>` : ''}
-        ${r.barcode && !r.gs1?.['01'] ? `<span class="gs1-gtin" style="color:var(--ink3)">${r.barcode.slice(0,24)}${r.barcode.length>24?'…':''}</span>` : ''}
-        <span style="margin-left:auto;font-size:9.5px;color:#009E9E;font-weight:700;font-family:'JetBrains Mono',monospace">GS1 ✓</span>
       </div>` : ''}
 
       <div class="scan-result-actions">
-        <button class="scan-accept-btn" id="acceptScanBtn" ${isExpired?'style="opacity:.45;pointer-events:none"':''}>
+        <button class="scan-accept-btn" id="acceptScanBtn"
+          ${!needsExpiry && isExpired ? 'style="opacity:.45;pointer-events:none"' : ''}>
           ✓ รับเข้าสต๊อก
         </button>
         <button class="scan-reject-btn" id="rejectScanBtn">ยกเลิก</button>
@@ -1915,35 +1937,59 @@ function processBarcode(rawText, formatName) {
     if (hasGS1) {
       result = buildResultFromGS1(gs1, rawText);
     } else {
-      // Non-GS1 barcode — look up in existing inventory by lot or saved barcode
-      const found = S.items.find(i => i.barcode === rawText || i.lot === rawText);
-      if (found) {
-        result = { ...found, dest: S.scanDest, barcode: rawText, _fromScan: true };
+      const raw = rawText.trim();
+      const isEAN = /^\d{8}$/.test(raw) || /^\d{13}$/.test(raw);
+      if (isEAN) {
+        // EAN-13 / EAN-8 — รหัสสินค้าไทย (885...) ไม่มีวันหมดอายุ/Lot ในบาร์โค้ด
+        // ต้องกรอกเพิ่มเติมเสมอ ไม่ว่าจะเคยบันทึกแล้วหรือไม่
+        const knownDrug = S.items.find(i => i.gtin === raw || i.barcode === raw);
+        S.scanFormat = /^\d{13}$/.test(raw) ? 'EAN-13' : 'EAN-8';
+        result = {
+          name: knownDrug?.name || '',
+          gen:  knownDrug?.gen  || '',
+          gtin: raw, barcode: raw,
+          lot: '', exp: null, qty: 1,
+          dest: S.scanDest,
+          highAlert: knownDrug?.highAlert || false,
+          lasa:      knownDrug?.lasa      || false,
+          cold:      knownDrug?.cold      || false,
+          _fromScan: true,
+          isNew: !knownDrug,        // ชื่อยาต้องกรอกถ้ายังไม่มีในระบบ
+          needsExpiry: true,        // วันหมดอายุต้องกรอกเสมอสำหรับ EAN-13
+        };
       } else {
-        S.scanState = 'idle';
-        updateScanViewport();
-        showToast('❌ ไม่พบบาร์โค้ดนี้ในระบบ — ใช้ GS1 หรือกรอกข้อมูลเอง', '#ff4d5e');
-        return;
+        // บาร์โค้ดรูปแบบอื่น — ค้นหาใน inventory
+        const found = S.items.find(i => i.barcode === raw || i.lot === raw);
+        if (found) {
+          result = { ...found, dest: S.scanDest, barcode: raw, _fromScan: true };
+        } else {
+          S.scanState = 'idle';
+          updateScanViewport();
+          showToast('❌ ไม่พบบาร์โค้ดนี้ในระบบ — ใช้ GS1 หรือกรอกข้อมูลเอง', '#ff4d5e');
+          return;
+        }
       }
     }
 
     S.scanResult = result;
     S.scanState = 'detected'; S.aiConf = 99;
 
-    const _st = itemStatus(result);
-    playScanChord(_st.key, result.highAlert);
+    // For EAN-13 (needsExpiry), exp is null — use neutral status until user fills in
+    const _stResult = result.needsExpiry ? { ...result, exp: new Date(Date.now() + 365*86400000) } : result;
+    const _st = itemStatus(_stResult);
+    if (!result.needsExpiry) playScanChord(_st.key, result.highAlert);
     handoffWrite(result, _st);
     bumpStreak();
     detectStress();
 
     // Hands-free TTS: full spoken summary so staff need not look at screen
-    if (S.voiceFeedback && S.settings.soundOn && result.name) {
+    if (result.needsExpiry) {
+      speak(result.name ? `${result.name} — กรุณากรอกวันหมดอายุ` : 'พบบาร์โค้ดยา — กรุณากรอกชื่อยาและวันหมดอายุ');
+    } else if (S.voiceFeedback && S.settings.soundOn && result.name) {
       const _dl = daysLeft(result.exp);
       const _dlTxt = _dl < 0 ? `หมดอายุแล้ว ${-_dl} วัน` : `เหลือ ${_dl} วัน`;
       const _stTh = { GREEN:'ปลอดภัย', YELLOW:'เฝ้าระวัง', ORANGE:'ใกล้หมดอายุ', RED:'วิกฤต' }[_st.key] || '';
       speak(`${result.name}. ${_dlTxt}. ${_stTh}`);
-    } else if (result.isNew) {
-      speak('พบยาใหม่ กรุณาระบุชื่อยา');
     }
 
     if (S.rapidMode) {
@@ -2001,6 +2047,8 @@ function updateScanViewport() {
 
 function acceptScan() {
   if (!S.scanResult) return;
+
+  // Step 1: Validate + read name if new drug
   if (S.scanResult.isNew) {
     const nameEl = document.getElementById('newDrugName');
     const genEl  = document.getElementById('newDrugGen');
@@ -2014,6 +2062,28 @@ function acceptScan() {
     S.scanResult.gen  = genEl ? genEl.value.trim() : '';
     delete S.scanResult.isNew;
   }
+
+  // Step 2: Validate + read expiry/lot/qty for EAN-13
+  if (S.scanResult.needsExpiry) {
+    const expEl = document.getElementById('ean13Expiry');
+    const lotEl = document.getElementById('ean13Lot');
+    const qtyEl = document.getElementById('ean13Qty');
+    const expVal = expEl ? expEl.value.trim() : '';
+    if (!expVal) {
+      pokaShake(expEl || document.querySelector('.scan-result-card'));
+      showToast('⚠ กรุณาระบุวันยาสิ้นอายุ', '#ff9f43');
+      return;
+    }
+    S.scanResult.exp = new Date(expVal);
+    if (isNaN(S.scanResult.exp.getTime())) {
+      showToast('⚠ วันที่ไม่ถูกต้อง', '#ff4d5e');
+      return;
+    }
+    if (lotEl && lotEl.value.trim()) S.scanResult.lot = lotEl.value.trim();
+    if (qtyEl && qtyEl.value.trim()) S.scanResult.qty = Math.max(1, parseInt(qtyEl.value) || 1);
+    delete S.scanResult.needsExpiry;
+  }
+
   vibrate([8,40,12]); sfx('success');
   speak(S.scanResult.name);
   S.scanHistory.unshift({ ...S.scanResult, ts: new Date() });
