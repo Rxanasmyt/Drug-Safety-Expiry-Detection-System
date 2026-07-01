@@ -731,20 +731,27 @@ function renderScanResult(r) {
 
         <!-- Expiry + Lot inputs — always required for EAN-13 -->
         ${needsExpiry ? `
-        <div style="font-size:11px;color:#ff9f43;font-weight:700;margin-top:6px">ยาไทย (EAN-13) ต้องกรอกวันหมดอายุเองเสมอ</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+        <button id="ocrCaptureBtn" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,rgba(0,158,158,.18),rgba(124,108,255,.18));border:1px solid rgba(0,158,158,.4);color:var(--ink);font-size:12px;font-weight:700;cursor:pointer;margin-top:2px">
+          📷 ถ่ายรูปข้อมูลยา — อ่านอัตโนมัติ
+        </button>
+        <input type="file" id="ocrFileInput" accept="image/*" capture="environment" style="display:none">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:2px">
           <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ยาสิ้นอายุ *</div>
             <input id="ean13Expiry" type="date" style="${inp};font-family:'JetBrains Mono',monospace">
           </div>
           <div>
+            <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">วันผลิต</div>
+            <input id="ean13Mfd" type="date" style="${inp};font-family:'JetBrains Mono',monospace">
+          </div>
+          <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ครั้งที่ผลิต / Lot</div>
             <input id="ean13Lot" placeholder="เช่น ST68-6470" style="${inp}">
           </div>
-        </div>
-        <div>
-          <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">จำนวน (หน่วย)</div>
-          <input id="ean13Qty" type="number" min="1" placeholder="1" style="${inp};width:100px">
+          <div>
+            <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">จำนวน (หน่วย)</div>
+            <input id="ean13Qty" type="number" min="1" placeholder="1" style="${inp}">
+          </div>
         </div>` : ''}
       </div>` : `
       <div class="scan-result-name" style="animation:typeReveal .3s ease">${r.name}</div>
@@ -1310,6 +1317,15 @@ function bindScanTab() {
   });
   const voiceBtn = document.getElementById('voiceBtn');
   if (voiceBtn) voiceBtn.addEventListener('click', toggleVoice);
+
+  const ocrBtn = document.getElementById('ocrCaptureBtn');
+  const ocrFile = document.getElementById('ocrFileInput');
+  if (ocrBtn && ocrFile) {
+    ocrBtn.addEventListener('click', () => ocrFile.click());
+    ocrFile.addEventListener('change', () => {
+      if (ocrFile.files && ocrFile.files[0]) handleOCRFile(ocrFile.files[0]);
+    });
+  }
 }
 
 function toggleVoice() {
@@ -1361,6 +1377,95 @@ function stopCamera() {
   S.scanState = 'idle';
   updateTabBody();
   showToast('📷 ปิดกล้องแล้ว', '#ff9f43');
+}
+
+// ── OCR AUTO-FILL ─────────────────────────────────────
+let _tesseract = null;
+async function _loadTesseract() {
+  if (_tesseract) return _tesseract;
+  if (window.Tesseract) { _tesseract = window.Tesseract; return _tesseract; }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = () => { _tesseract = window.Tesseract; resolve(_tesseract); };
+    s.onerror = () => reject(new Error('Tesseract load failed'));
+    document.head.appendChild(s);
+  });
+}
+
+async function handleOCRFile(file) {
+  if (!file) return;
+  showToast('🔍 กำลังอ่านข้อมูลยา...', '#7c6cff');
+  const btn = document.getElementById('ocrCaptureBtn');
+  if (btn) { btn.textContent = '⏳ กำลังอ่าน...'; btn.disabled = true; }
+  try {
+    const T = await _loadTesseract();
+    const worker = await T.createWorker(['eng', 'tha']);
+    const { data: { text } } = await worker.recognize(file);
+    await worker.terminate();
+    const parsed = parseOCRText(text);
+    let filled = 0;
+    if (parsed.exp) { const el = document.getElementById('ean13Expiry'); if (el) { el.value = parsed.exp; filled++; } }
+    if (parsed.mfd) { const el = document.getElementById('ean13Mfd');    if (el) { el.value = parsed.mfd; filled++; } }
+    if (parsed.lot) { const el = document.getElementById('ean13Lot');    if (el && !el.value) { el.value = parsed.lot; filled++; } }
+    if (filled > 0) {
+      vibrate([8, 30, 8]); sfx('success');
+      showToast(`✓ อ่านได้ ${filled} ช่อง — ตรวจสอบข้อมูลก่อนยืนยัน`, '#2ee6a6');
+    } else {
+      showToast('⚠ อ่านไม่พบข้อมูล — ถ่ายให้ชัดขึ้นหรือกรอกเอง', '#ff9f43');
+    }
+  } catch(e) {
+    console.warn('OCR error:', e);
+    showToast('⚠ OCR ล้มเหลว — กรุณากรอกข้อมูลเอง', '#ff4d5e');
+  } finally {
+    if (btn) { btn.textContent = '📷 ถ่ายรูปข้อมูลยา — อ่านอัตโนมัติ'; btn.disabled = false; }
+  }
+}
+
+function parseOCRText(raw) {
+  // Normalize: Thai digits → Arabic, common OCR character confusion
+  const text = raw
+    .replace(/[๐-๙]/g, d => String.fromCharCode(d.charCodeAt(0) - 0x0E50 + 48))
+    .replace(/(?<![A-Za-z])O(?![A-Za-z])/g, '0')
+    .replace(/(?<![A-Za-z])l(?![A-Za-z])/g, '1');
+
+  function toIso(str) {
+    // DD/MM/YYYY or DD-MM-YYYY
+    let m = str.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})\b/);
+    if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+    // MM/YYYY or MM-YYYY
+    m = str.match(/\b(0?[1-9]|1[0-2])[\/\-](20\d{2})\b/);
+    if (m) return `${m[2]}-${m[1].padStart(2,'0')}-01`;
+    // YYYY/MM or YYYY-MM
+    m = str.match(/\b(20\d{2})[\/\-](0?[1-9]|1[0-2])\b/);
+    if (m) return `${m[1]}-${m[2].padStart(2,'0')}-01`;
+    // MMM YYYY (APR 2025, APR. 2025)
+    const months = {JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+    m = str.match(/\b([A-Z]{3})\.?\s*(20\d{2})\b/i);
+    if (m) { const mo = months[m[1].toUpperCase()]; if (mo) return `${m[2]}-${mo}-01`; }
+    return null;
+  }
+
+  const result = {};
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const u = line.toUpperCase();
+    if (!result.exp && /\bEXP\.?(?:\s*DATE)?\b|USE\s+BEFORE|หมดอายุ|ใช้ก่อน/.test(u)) {
+      const d = toIso(line); if (d) result.exp = d;
+    }
+    if (!result.mfd && /\bMF[GD]\.?\b|MANUFACTURED|วันผลิต|ผลิตวันที่/.test(u)) {
+      const d = toIso(line); if (d) result.mfd = d;
+    }
+    if (!result.lot && /\bLOT\.?(?:\s*NO\.?)?\b|\bBATCH\.?(?:\s*NO\.?)?\b|\bL\/N\b/.test(u)) {
+      const m = line.match(/(?:LOT\.?(?:\s*NO\.?)?|BATCH\.?(?:\s*NO\.?)?|L\/N)[:\s]*([A-Z0-9\-]{3,20})/i);
+      if (m) result.lot = m[1].trim();
+    }
+  }
+  // Second pass: scan for inline patterns in case keyword and date are on same line
+  if (!result.exp) { const m = text.match(/EXP\.?[:\s]*([^\n]{4,25})/i); if (m) { const d = toIso(m[1]); if (d) result.exp = d; } }
+  if (!result.mfd) { const m = text.match(/MF[GD]\.?[:\s]*([^\n]{4,25})/i); if (m) { const d = toIso(m[1]); if (d) result.mfd = d; } }
+
+  return result;
 }
 
 let _barcodeLoop = null;
@@ -2097,6 +2202,8 @@ function acceptScan() {
       showToast('⚠ วันที่ไม่ถูกต้อง', '#ff4d5e');
       return;
     }
+    const mfdEl = document.getElementById('ean13Mfd');
+    if (mfdEl && mfdEl.value.trim()) S.scanResult.mfd = new Date(mfdEl.value.trim());
     if (lotEl && lotEl.value.trim()) S.scanResult.lot = lotEl.value.trim();
     if (qtyEl && qtyEl.value.trim()) S.scanResult.qty = Math.max(1, parseInt(qtyEl.value) || 1);
     delete S.scanResult.needsExpiry;
@@ -2130,7 +2237,7 @@ function addToItems(r) {
       name: r.name, gen: r.gen||'', lot: r.lot||'', exp, qty: r.qty||1,
       loc, highAlert: !!r.highAlert, lasa: !!r.lasa, cold: !!r.cold, age: 0,
       form: r.cold ? 'pen' : r.highAlert ? 'vial' : 'tab',
-      gtin: r.gtin || '',
+      gtin: r.gtin || '', mfd: r.mfd || null,
     });
   }
 }
@@ -2255,6 +2362,7 @@ function initFirestore() {
           age: 0,
           form: (d.unit||'').includes('vial') ? 'vial' : (d.unit||'').includes('capsule') ? 'cap' : 'tab',
           gtin: d.gtin || '',
+          mfd: d.mfd ? new Date(d.mfd) : null,
           _fromFirestore: true,
         };
       });
@@ -2277,6 +2385,7 @@ async function saveToFirestore(item) {
       isEmergency: !!item.highAlert, minStock: 0, cat: 'Other',
       storage: item.cold ? 'Refrigerated (2–8°C)' : 'Room Temperature (15–25°C)',
       gtin: item.gtin || '',
+      mfd: item.mfd instanceof Date ? item.mfd.toISOString().slice(0,10) : (item.mfd || ''),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await drugsRef.add(data);
