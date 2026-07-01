@@ -732,8 +732,12 @@ function renderScanResult(r) {
 
         <!-- Expiry + Lot inputs — always required for EAN-13 -->
         ${needsExpiry ? `
+        ${S.cameraActive ? `
+        <div style="font-size:11px;color:#2ee6a6;text-align:center;padding:6px 8px;background:rgba(46,230,166,.1);border-radius:10px;border:1px solid rgba(46,230,166,.3);font-weight:700">
+          🎯 กล้องยังทำงานอยู่ — เล็งที่บาร์โค้ด DataMatrix / QR บนกล่องยาเพื่ออ่านข้อมูลอัตโนมัติ
+        </div>` : ''}
         <button id="ocrCaptureBtn" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,rgba(0,158,158,.18),rgba(124,108,255,.18));border:1px solid rgba(0,158,158,.4);color:var(--ink);font-size:12px;font-weight:700;cursor:pointer;margin-top:2px">
-          📷 ถ่ายรูปข้อมูลยา — อ่านอัตโนมัติ
+          📷 ถ่ายรูปกล่องยา — อ่าน EXP/LOT อัตโนมัติ
         </button>
         <input type="file" id="ocrFileInput" accept="image/*" capture="environment" style="display:none">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:2px">
@@ -1394,15 +1398,46 @@ async function _loadTesseract() {
   });
 }
 
+async function preprocessImage(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 2400;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const W = Math.round(img.width * scale);
+      const H = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, W, H);
+      const id = ctx.getImageData(0, 0, W, H);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const g = Math.round(0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]);
+        const c = Math.min(255, Math.max(0, (g - 128) * 1.8 + 128));
+        d[i] = d[i+1] = d[i+2] = c; d[i+3] = 255;
+      }
+      ctx.putImageData(id, 0, 0);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(b => resolve(b || file), 'image/png');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
 async function handleOCRFile(file) {
   if (!file) return;
   showToast('🔍 กำลังอ่านข้อมูลยา...', '#7c6cff');
   const btn = document.getElementById('ocrCaptureBtn');
   if (btn) { btn.textContent = '⏳ กำลังอ่าน...'; btn.disabled = true; }
   try {
+    const processed = await preprocessImage(file);
     const T = await _loadTesseract();
     const worker = await T.createWorker(['eng', 'tha']);
-    const { data: { text } } = await worker.recognize(file);
+    await worker.setParameters({ tessedit_pageseg_mode: '11' }); // sparse text — best for drug labels
+    const { data: { text } } = await worker.recognize(processed);
     await worker.terminate();
     const parsed = parseOCRText(text);
     let filled = 0;
@@ -1425,26 +1460,44 @@ async function handleOCRFile(file) {
 }
 
 function parseOCRText(raw) {
-  // Normalize: Thai digits → Arabic, common OCR character confusion
+  // Normalize: Thai digits → Arabic, OCR confusion, Buddhist Era → CE
   const text = raw
     .replace(/[๐-๙]/g, d => String.fromCharCode(d.charCodeAt(0) - 0x0E50 + 48))
     .replace(/(?<![A-Za-z])O(?![A-Za-z])/g, '0')
-    .replace(/(?<![A-Za-z])l(?![A-Za-z])/g, '1');
+    .replace(/(?<![A-Za-z])l(?![A-Za-z])/g, '1')
+    .replace(/\b(25[6-9]\d)\b/g, m => String(parseInt(m) - 543)); // พ.ศ. → ค.ศ.
+
+  const ENG_MONTHS = {JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  const THAI_MONTHS = {
+    'ม.ค':'01','ก.พ':'02','มี.ค':'03','เม.ย':'04','พ.ค':'05','มิ.ย':'06',
+    'ก.ค':'07','ส.ค':'08','ก.ย':'09','ต.ค':'10','พ.ย':'11','ธ.ค':'12',
+    'มกราคม':'01','กุมภาพันธ์':'02','มีนาคม':'03','เมษายน':'04',
+    'พฤษภาคม':'05','มิถุนายน':'06','กรกฎาคม':'07','สิงหาคม':'08',
+    'กันยายน':'09','ตุลาคม':'10','พฤศจิกายน':'11','ธันวาคม':'12',
+  };
 
   function toIso(str) {
+    let m;
     // DD/MM/YYYY or DD-MM-YYYY
-    let m = str.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})\b/);
+    m = str.match(/\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](20\d{2})\b/);
     if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
-    // MM/YYYY or MM-YYYY
+    // MM/YYYY or MM-YYYY (month ≤ 12)
     m = str.match(/\b(0?[1-9]|1[0-2])[\/\-](20\d{2})\b/);
     if (m) return `${m[2]}-${m[1].padStart(2,'0')}-01`;
     // YYYY/MM or YYYY-MM
     m = str.match(/\b(20\d{2})[\/\-](0?[1-9]|1[0-2])\b/);
     if (m) return `${m[1]}-${m[2].padStart(2,'0')}-01`;
-    // MMM YYYY (APR 2025, APR. 2025)
-    const months = {JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+    // MMM YYYY — English (APR 2025, APR. 2025, APR2025)
     m = str.match(/\b([A-Z]{3})\.?\s*(20\d{2})\b/i);
-    if (m) { const mo = months[m[1].toUpperCase()]; if (mo) return `${m[2]}-${mo}-01`; }
+    if (m) { const mo = ENG_MONTHS[m[1].toUpperCase()]; if (mo) return `${m[2]}-${mo}-01`; }
+    // Thai month names (ก.พ. 2568 already converted to 2025)
+    for (const [th, mo] of Object.entries(THAI_MONTHS)) {
+      const tm = str.match(new RegExp(th + '[ุ\\.]?[\\s]*(20\\d{2})'));
+      if (tm) return `${tm[1]}-${mo}-01`;
+    }
+    // Bare 4-digit year only (last resort)
+    m = str.match(/\b(20\d{2})\b/);
+    if (m) return `${m[1]}-01-01`;
     return null;
   }
 
@@ -1458,8 +1511,8 @@ function parseOCRText(raw) {
     if (!result.mfd && /\bMF[GD]\.?\b|MANUFACTURED|วันผลิต|ผลิตวันที่/.test(u)) {
       const d = toIso(line); if (d) result.mfd = d;
     }
-    if (!result.lot && /\bLOT\.?(?:\s*NO\.?)?\b|\bBATCH\.?(?:\s*NO\.?)?\b|\bL\/N\b/.test(u)) {
-      const m = line.match(/(?:LOT\.?(?:\s*NO\.?)?|BATCH\.?(?:\s*NO\.?)?|L\/N)[:\s]*([A-Z0-9\-]{3,20})/i);
+    if (!result.lot && /\bLOT\.?(?:\s*NO\.?)?\b|\bBATCH\.?(?:\s*NO\.?)?\b|\bL\/N\b|\bB\.?N\b/.test(u)) {
+      const m = line.match(/(?:LOT\.?(?:\s*NO\.?)?|BATCH\.?(?:\s*NO\.?)?|L\/N|B\.?N)[:\s]*([A-Z0-9\-]{3,25})/i);
       if (m) result.lot = m[1].trim();
     }
   }
@@ -1507,10 +1560,45 @@ function _zxingHints() {
   } catch(e) { return null; }
 }
 
+// Fill expiry-form fields directly from GS1 AIs — used when 2D barcode is scanned while form is open
+function _fillFormFromGS1(gs1) {
+  let filled = 0;
+  if (gs1['17']) {
+    const d = parseGS1Expiry(gs1['17']);
+    if (d) { const el = document.getElementById('ean13Expiry'); if (el) { el.value = d.toISOString().slice(0,10); filled++; } }
+  } else if (gs1['15']) {
+    const d = parseGS1Expiry(gs1['15']);
+    if (d) { const el = document.getElementById('ean13Expiry'); if (el) { el.value = d.toISOString().slice(0,10); filled++; } }
+  }
+  if (gs1['11']) {
+    const d = parseGS1Expiry(gs1['11']);
+    if (d) { const el = document.getElementById('ean13Mfd'); if (el) { el.value = d.toISOString().slice(0,10); filled++; } }
+  }
+  if (gs1['10']) {
+    const el = document.getElementById('ean13Lot');
+    if (el && !el.value) { el.value = gs1['10']; filled++; }
+  }
+  if (filled > 0) {
+    vibrate([8, 30, 8]); sfx('success');
+    showToast(`✓ อ่าน ${filled} ข้อมูลจากบาร์โค้ด 2D — ตรวจสอบแล้วกด รับเข้าสต๊อก`, '#2ee6a6');
+  }
+}
+
 // Shared debounced barcode handler — called by both BarcodeDetector and ZXing
 function _onBarcode(raw, fmt) {
   const now = Date.now();
   if (now - _lastScanMs < 1500) return;
+
+  // Special path: expiry form is open — let a GS1 2D barcode fill the fields directly
+  if (S.scanState === 'detected' && S.scanResult?.needsExpiry) {
+    const gs1 = parseGS1(raw);
+    if (gs1['17'] || gs1['15'] || gs1['11'] || gs1['10']) {
+      _lastScanMs = now;
+      _fillFormFromGS1(gs1);
+    }
+    return; // never replace the open result while form is visible
+  }
+
   if (['lockon','decoding','detected'].includes(S.scanState)) return;
   if (!S.cameraActive) return;
   _lastScanMs = now;
@@ -1983,10 +2071,13 @@ function parseGS1Expiry(yymmdd) {
 }
 
 function buildResultFromGS1(gs1, rawText) {
-  const lot   = gs1['10'] || '';
-  const qty   = gs1['37'] ? Math.max(1, parseInt(gs1['37'])) : 1;
-  const gtin  = gs1['01'] || '';
-  const expDate = gs1['17'] ? parseGS1Expiry(gs1['17']) : null;
+  const lot     = gs1['10'] || '';
+  const qty     = gs1['37'] ? Math.max(1, parseInt(gs1['37'])) : 1;
+  const gtin    = gs1['01'] || '';
+  // AI(17) = expiry, AI(15) = best-before (fallback), AI(11) = production date
+  const expDate = gs1['17'] ? parseGS1Expiry(gs1['17'])
+                : gs1['15'] ? parseGS1Expiry(gs1['15']) : null;
+  const mfdDate = gs1['11'] ? parseGS1Expiry(gs1['11']) : null;
   const needsExpiry = !expDate;
 
   // Match lot number against inventory
@@ -1995,6 +2086,7 @@ function buildResultFromGS1(gs1, rawText) {
     if (byLot) return {
       ...byLot, qty: byLot.qty + qty, dest: S.scanDest,
       ...(expDate ? { exp: expDate } : { needsExpiry: true }),
+      ...(mfdDate ? { mfd: mfdDate } : {}),
       barcode: rawText, gs1,
     };
   }
@@ -2005,6 +2097,7 @@ function buildResultFromGS1(gs1, rawText) {
     if (byGtin) return {
       ...byGtin, lot, qty, dest: S.scanDest,
       ...(expDate ? { exp: expDate } : { needsExpiry: true }),
+      ...(mfdDate ? { mfd: mfdDate } : {}),
       barcode: rawText, gs1,
     };
   }
@@ -2012,7 +2105,7 @@ function buildResultFromGS1(gs1, rawText) {
   // New drug — require name + expiry from user
   return {
     name: '', gen: '', lot, qty,
-    exp: expDate || null,
+    exp: expDate || null, mfd: mfdDate || null,
     dest: S.scanDest, highAlert: false, lasa: false, cold: false,
     barcode: rawText, gs1, gtin, _fromScan: true, isNew: true,
     needsExpiry,
