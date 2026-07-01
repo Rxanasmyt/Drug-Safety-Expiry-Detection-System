@@ -1391,44 +1391,79 @@ function stopCamera() {
 let _barcodeLoop = null;
 let _zxingReader = null;
 
-function startBarcodeDetection(videoEl) {
-  if (!('BarcodeDetector' in window)) {
-    S.scanState = 'detecting'; updateScanViewport(); return;
-  }
+function _zxingHints() {
+  if (!window.ZXing) return null;
   try {
-    const det = new BarcodeDetector({ formats: ['ean_13','qr_code','data_matrix','code_128','code_39','aztec','pdf_417'] });
-    S.barcodeDetector = det;
-    S.scanState = 'detecting'; updateScanViewport();
-    _barcodeLoop = setInterval(async () => {
-      if (!S.cameraActive || ['lockon','decoding','detected'].includes(S.scanState)) return;
-      try {
-        const codes = await det.detect(videoEl);
-        if (codes.length > 0) {
-          clearInterval(_barcodeLoop); _barcodeLoop = null;
-          processBarcode(codes[0].rawValue, codes[0].format);
-        }
-      } catch(e) {}
-    }, 200);
-  } catch(e) {
-    S.scanState = 'detecting'; updateScanViewport();
+    const fmt = ZXing.BarcodeFormat;
+    const hints = new Map([
+      [ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        fmt.EAN_13, fmt.EAN_8,
+        fmt.CODE_128, fmt.CODE_39,
+        fmt.QR_CODE, fmt.DATA_MATRIX,
+        fmt.PDF_417, fmt.AZTEC,
+        fmt.ITF, fmt.UPC_A, fmt.UPC_E,
+      ]],
+      [ZXing.DecodeHintType.TRY_HARDER, true],
+    ]);
+    return hints;
+  } catch(e) { return null; }
+}
+
+function _onZXingResult(result, err) {
+  if (!result || !S.cameraActive) return;
+  if (['lockon','decoding','detected'].includes(S.scanState)) return;
+  try {
+    processBarcode(result.getText(), result.getBarcodeFormat().toString());
+  } catch(e) { console.warn('processBarcode:', e); }
+}
+
+function startBarcodeDetection(videoEl) {
+  // BarcodeDetector (Chrome desktop/Android)
+  if ('BarcodeDetector' in window) {
+    try {
+      const det = new BarcodeDetector({ formats: ['ean_13','ean_8','qr_code','data_matrix','code_128','code_39','aztec','pdf_417','upc_a','upc_e','itf'] });
+      S.barcodeDetector = det;
+      S.scanState = 'detecting'; updateScanViewport();
+      _barcodeLoop = setInterval(async () => {
+        if (!S.cameraActive || ['lockon','decoding','detected'].includes(S.scanState)) return;
+        try {
+          const codes = await det.detect(videoEl);
+          if (codes.length > 0) {
+            clearInterval(_barcodeLoop); _barcodeLoop = null;
+            processBarcode(codes[0].rawValue, codes[0].format);
+          }
+        } catch(e) {}
+      }, 250);
+      return;
+    } catch(e) {}
   }
+  // Fallback: ZXing decode loop on existing stream (Safari / Firefox)
+  if (window.ZXing && videoEl.srcObject) {
+    try {
+      if (_zxingReader) { try { _zxingReader.reset(); } catch(e) {} }
+      _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 300 });
+      _zxingReader.decodeFromStream(videoEl.srcObject, videoEl, _onZXingResult);
+      S.scanState = 'detecting'; updateScanViewport();
+      return;
+    } catch(e) { console.warn('ZXing stream fallback:', e); }
+  }
+  // Last resort: show active state and let user try manual entry
+  S.scanState = 'detecting'; updateScanViewport();
+  showToast('⚠ บราวเซอร์นี้สแกนอัตโนมัติไม่ได้ — ลองกรอกบาร์โค้ดเอง', '#ff9f43');
 }
 
 function startZXingScanner(videoEl) {
   if (!window.ZXing) { startLegacyCamera(videoEl); return; }
   try {
-    _zxingReader = new ZXing.BrowserMultiFormatReader(null, { delayBetweenScanAttempts: 150 });
+    if (_zxingReader) { try { _zxingReader.reset(); } catch(e) {} _zxingReader = null; }
+    _zxingReader = new ZXing.BrowserMultiFormatReader(_zxingHints(), { delayBetweenScanAttempts: 300 });
     _zxingReader.decodeFromConstraints(
-      { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: false, video: { facingMode: { ideal: 'environment' } } },
       videoEl,
-      (result, err) => {
-        if (!result || !S.cameraActive) return;
-        if (['lockon','decoding','detected'].includes(S.scanState)) return;
-        processBarcode(result.getText(), result.getBarcodeFormat().toString());
-      }
+      _onZXingResult
     ).then(() => {
       S.scanState = 'detecting'; updateScanViewport();
-      showToast('📷 ZXing พร้อม — เล็งบาร์โค้ด GS1', '#2ee6a6');
+      showToast('📷 กล้องพร้อม — เล็งบาร์โค้ดให้อยู่ในกรอบ', '#2ee6a6');
     }).catch(e => {
       console.warn('ZXing decodeFromConstraints:', e);
       _zxingReader = null;
@@ -1442,17 +1477,19 @@ function startZXingScanner(videoEl) {
 }
 
 function startLegacyCamera(videoEl) {
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+  const constraints = { audio: false, video: { facingMode: { ideal: 'environment' } } };
+  navigator.mediaDevices.getUserMedia(constraints)
     .then(stream => {
       S.cameraStream = stream;
       videoEl.srcObject = stream;
       videoEl.play().catch(() => {});
       startBarcodeDetection(videoEl);
-      showToast('📷 กล้องพร้อม — เล็งที่บาร์โค้ด', '#2ee6a6');
+      showToast('📷 กล้องพร้อม — เล็งบาร์โค้ดให้อยู่ในกรอบ', '#2ee6a6');
     })
-    .catch(() => {
+    .catch(err => {
+      console.warn('getUserMedia:', err);
       S.cameraActive = false; updateTabBody();
-      showToast('📵 ไม่สามารถเปิดกล้องได้ — ลอง AI สแกน', '#ff9f43');
+      showToast('📵 ไม่สามารถเปิดกล้องได้ — กรุณาอนุญาตสิทธิ์กล้อง', '#ff4d5e');
     });
 }
 
