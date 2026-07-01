@@ -607,7 +607,7 @@ function renderScanTab() {
     </div>` : '';
 
   const resultHTML = S.scanResult ? renderScanResult(S.scanResult)
-    : idle ? `<div class="scan-empty"><div class="scan-empty-icon">🔬</div>ยังไม่มีรายการสแกน<br><span style="font-size:11px;color:var(--ink3)">แตะ "AI สแกน" หรือเปิดกล้องจริง</span></div>` : '';
+    : idle ? `<div class="scan-empty"><div class="scan-empty-icon">🔬</div>ยังไม่มีรายการสแกน<br><span style="font-size:11px;color:var(--ink3)">เปิดกล้องสแกนบาร์โค้ด หรือกรอกรหัสด้วยตนเอง</span></div>` : '';
 
   /* voice waveform bars */
   const waveHTML = [18,26,22,28,20,24,16].map((_,i) =>
@@ -659,8 +659,8 @@ function renderScanTab() {
 
     <!-- Action buttons -->
     <div class="scan-actions-3">
-      <button class="scan-btn-primary" id="simScanBtn" style="background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 10px 28px -8px ${destC}77;${scanning?'opacity:.65;pointer-events:none':''}">
-        <span style="font-size:17px">🤖</span>AI สแกน
+      <button class="scan-btn-primary" id="barcodeInputBtn" style="background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 10px 28px -8px ${destC}77;${scanning?'opacity:.65;pointer-events:none':''}">
+        <span style="font-size:17px">⌨</span>กรอกบาร์โค้ด
       </button>
       <button class="scan-btn-cam${S.cameraActive?' active':''}" id="camToggleBtn">
         <span style="font-size:16px">${S.cameraActive?'🔴':'📷'}</span>${S.cameraActive?'ปิดกล้อง':'กล้องจริง'}
@@ -725,12 +725,19 @@ function renderScanResult(r) {
       </div>
 
       <div class="scan-result-header">
-        <span class="scan-result-ok-label"><span>✨</span>AI ดึงข้อมูลครบ · ไม่ต้องกรอกเอง</span>
+        <span class="scan-result-ok-label"><span>${r.isNew?'⚠':'✨'}</span>${r.isNew?'ยาใหม่ — กรุณาระบุชื่อ':'GS1 ดึงข้อมูลครบ · ไม่ต้องกรอกเอง'}</span>
         <span class="scan-result-format">${S.scanFormat.includes('GS1')?'GS1-2D':'2D'}</span>
       </div>
 
+      ${r.isNew ? `
+      <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px;animation:typeReveal .3s ease">
+        <input id="newDrugName" placeholder="ชื่อยา (จำเป็น)..." value=""
+          style="background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%">
+        <input id="newDrugGen" placeholder="Generic / ชื่อสามัญ..."  value=""
+          style="background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:9px 12px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%">
+      </div>` : `
       <div class="scan-result-name" style="animation:typeReveal .3s ease">${r.name}</div>
-      <div class="scan-result-gen" style="animation:typeReveal .3s .06s both">${r.gen||''}</div>
+      <div class="scan-result-gen" style="animation:typeReveal .3s .06s both">${r.gen||''}</div>`}
 
       ${r.dest ? `<div class="scan-result-dest" style="background:${destC}1e;border:1px solid ${destC}55;animation:typeReveal .3s .1s both">
         <span>${destC==='#7c6cff'?'📦':'🛎'}</span><span style="font-size:12px;font-weight:700;color:${destC}">${destLabel}</span>
@@ -1271,8 +1278,8 @@ function bindScanTab() {
     });
   });
 
-  const simScan = document.getElementById('simScanBtn');
-  if (simScan) simScan.addEventListener('click', doSimScan);
+  const barcodeInputBtn = document.getElementById('barcodeInputBtn');
+  if (barcodeInputBtn) barcodeInputBtn.addEventListener('click', openBarcodeInputSheet);
 
   const camToggle = document.getElementById('camToggleBtn');
   if (camToggle) camToggle.addEventListener('click', toggleCamera);
@@ -1735,14 +1742,48 @@ function cancelFace() {
 }
 
 // ── SCAN LOGIC ────────────────────────────────────────
-const SCAN_POOL = [
-  { name:'Adrenaline 1mg/mL', gen:'Epinephrine inj.', lot:'A'+Date.now().toString().slice(-4), expDays:12, qty:8, highAlert:true, lasa:false, cold:false },
-  { name:'Warfarin 5mg', gen:'Warfarin sodium', lot:'WF'+Date.now().toString().slice(-4), expDays:64, qty:3, highAlert:true, lasa:true, cold:false },
-  { name:'Paracetamol 500mg', gen:'Acetaminophen', lot:'PC'+Date.now().toString().slice(-4), expDays:310, qty:60, highAlert:false, lasa:false, cold:false },
-  { name:'Insulin Glargine', gen:'Lantus 100IU/mL', lot:'LZ'+Date.now().toString().slice(-4), expDays:120, qty:5, highAlert:false, lasa:false, cold:true },
-  { name:'Amoxicillin 500mg', gen:'Amoxicillin', lot:'AM'+Date.now().toString().slice(-4), expDays:82, qty:40, highAlert:false, lasa:false, cold:false },
-  { name:'Metformin 850mg', gen:'Metformin HCl', lot:'MF'+Date.now().toString().slice(-4), expDays:-3, qty:12, highAlert:false, lasa:false, cold:false },
-];
+
+function openBarcodeInputSheet() {
+  if (['detecting','lockon','decoding'].includes(S.scanState)) return;
+  vibrate(8);
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  let overlay = document.getElementById('barcodeInputOverlay');
+  if (overlay) overlay.remove();
+  appScreen.insertAdjacentHTML('beforeend', `
+    <div class="overlay sheet-overlay" id="barcodeInputOverlay" style="z-index:300">
+      <div id="sheet-box" style="padding:20px">
+        <div id="sheet-handle"></div>
+        <div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:14px">⌨ กรอกบาร์โค้ด / รหัสยา</div>
+        <input id="barcodeManualInput" type="text" inputmode="text"
+          placeholder="สแกนหรือพิมพ์บาร์โค้ด เช่น (01)06901234567890(17)260630(10)LOT01"
+          style="background:var(--glass);border:1.5px solid var(--glassb);border-radius:12px;padding:11px 14px;font-size:13px;font-family:'Sarabun',sans-serif;color:var(--ink);width:100%;margin-bottom:12px">
+        <div style="font-size:11px;color:var(--ink3);margin-bottom:14px">รองรับ GS1 DataMatrix, GS1-128, EAN-13, หรือรหัส Lot</div>
+        <div style="display:flex;gap:10px">
+          <button id="barcodeSubmitBtn" style="flex:1;padding:12px;border-radius:14px;background:var(--brand);color:#fff;font-size:14px;font-weight:700;border:none;font-family:'Sarabun',sans-serif">
+            ✓ ยืนยัน
+          </button>
+          <button id="barcodeCloseBtn" style="padding:12px 18px;border-radius:14px;background:var(--glass);color:var(--ink2);font-size:14px;border:1px solid var(--glassb);font-family:'Sarabun',sans-serif">
+            ยกเลิก
+          </button>
+        </div>
+      </div>
+    </div>`);
+  const inp = document.getElementById('barcodeManualInput');
+  if (inp) inp.focus();
+  document.getElementById('barcodeSubmitBtn').addEventListener('click', () => {
+    const val = (document.getElementById('barcodeManualInput')?.value || '').trim();
+    if (!val) { showToast('⚠ กรุณากรอกบาร์โค้ด', '#ff9f43'); return; }
+    document.getElementById('barcodeInputOverlay')?.remove();
+    processBarcode(val, 'MANUAL');
+  });
+  document.getElementById('barcodeCloseBtn').addEventListener('click', () => {
+    document.getElementById('barcodeInputOverlay')?.remove();
+  });
+  document.getElementById('barcodeManualInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('barcodeSubmitBtn')?.click();
+  });
+}
 
 // ── GS1 BARCODE ENGINE ────────────────────────────────
 // Fixed-length AI data-field lengths (after 2-digit AI code)
@@ -1816,12 +1857,11 @@ function buildResultFromGS1(gs1, rawText) {
     if (byGtin) return { ...byGtin, lot, qty, dest: S.scanDest, exp: expDate, barcode: rawText, gs1 };
   }
 
-  // New entry — pick representative drug from pool as template
-  const p = SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)];
+  // New drug not in system — return GS1 data only, require user to enter drug name
   return {
-    name: p.name, gen: p.gen, lot, qty, exp: expDate,
-    dest: S.scanDest, highAlert: p.highAlert, lasa: p.lasa, cold: p.cold,
-    barcode: rawText, gs1, gtin, _fromScan: true,
+    name: '', gen: '', lot, qty, exp: expDate,
+    dest: S.scanDest, highAlert: false, lasa: false, cold: false,
+    barcode: rawText, gs1, gtin, _fromScan: true, isNew: true,
   };
 }
 
@@ -1871,13 +1911,21 @@ function processBarcode(rawText, formatName) {
 
   setTimeout(() => {
     if (!['lockon','decoding'].includes(S.scanState)) return;
-    const result = hasGS1
-      ? buildResultFromGS1(gs1, rawText)
-      : (() => {
-          const p = { ...SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)] };
-          const exp = new Date(); exp.setDate(exp.getDate() + (p.expDays || 90));
-          return { ...p, exp, dest: S.scanDest, barcode: rawText };
-        })();
+    let result;
+    if (hasGS1) {
+      result = buildResultFromGS1(gs1, rawText);
+    } else {
+      // Non-GS1 barcode — look up in existing inventory by lot or saved barcode
+      const found = S.items.find(i => i.barcode === rawText || i.lot === rawText);
+      if (found) {
+        result = { ...found, dest: S.scanDest, barcode: rawText, _fromScan: true };
+      } else {
+        S.scanState = 'idle';
+        updateScanViewport();
+        showToast('❌ ไม่พบบาร์โค้ดนี้ในระบบ — ใช้ GS1 หรือกรอกข้อมูลเอง', '#ff4d5e');
+        return;
+      }
+    }
 
     S.scanResult = result;
     S.scanState = 'detected'; S.aiConf = 99;
@@ -1889,11 +1937,13 @@ function processBarcode(rawText, formatName) {
     detectStress();
 
     // Hands-free TTS: full spoken summary so staff need not look at screen
-    if (S.voiceFeedback && S.settings.soundOn) {
+    if (S.voiceFeedback && S.settings.soundOn && result.name) {
       const _dl = daysLeft(result.exp);
       const _dlTxt = _dl < 0 ? `หมดอายุแล้ว ${-_dl} วัน` : `เหลือ ${_dl} วัน`;
       const _stTh = { GREEN:'ปลอดภัย', YELLOW:'เฝ้าระวัง', ORANGE:'ใกล้หมดอายุ', RED:'วิกฤต' }[_st.key] || '';
       speak(`${result.name}. ${_dlTxt}. ${_stTh}`);
+    } else if (result.isNew) {
+      speak('พบยาใหม่ กรุณาระบุชื่อยา');
     }
 
     if (S.rapidMode) {
@@ -1908,70 +1958,6 @@ function processBarcode(rawText, formatName) {
     }
     updateTabBody();
   }, 1050);
-}
-
-// ── SIM SCAN ──────────────────────────────────────────
-function doSimScan() {
-  if (['detecting','lockon','decoding'].includes(S.scanState)) return;
-  vibrate([8,30,8]); sfx('scan');
-
-  // Phase 1: detecting
-  S.scanState = 'detecting'; S.aiConf = 0; S.scanResult = null;
-  updateTabBody();
-
-  // Phase 2: lock-on
-  const t1 = setTimeout(() => {
-    if (S.scanState !== 'detecting') return;
-    sfx('tick'); vibrate(6);
-    S.scanState = 'lockon'; S.aiConf = 60;
-    updateScanViewport();
-  }, 480);
-
-  // Phase 3: decoding — animate confidence count-up
-  const t2 = setTimeout(() => {
-    if (S.scanState !== 'lockon') return;
-    sfx('tick'); vibrate(4);
-    S.scanState = 'decoding'; S.aiConf = 75;
-    updateScanViewport();
-    let c = 75;
-    const tick = setInterval(() => {
-      c = Math.min(98, c + Math.floor(Math.random()*8 + 3));
-      S.aiConf = c;
-      const wrap = document.querySelector('.ai-conf-wrap');
-      if (wrap) {
-        const txt = wrap.querySelector('.ai-conf-text');
-        if (txt) txt.textContent = c + '%';
-        const bar = wrap.querySelector('.ai-conf-bar');
-        const circ = 201;
-        if (bar) bar.style.strokeDashoffset = circ - (circ * c / 100);
-      }
-      if (c >= 98) clearInterval(tick);
-    }, 90);
-  }, 850);
-
-  // Phase 4: result
-  const t3 = setTimeout(() => {
-    if (!['lockon','decoding'].includes(S.scanState)) return;
-    const r = { ...SCAN_POOL[Math.floor(Math.random() * SCAN_POOL.length)] };
-    const exp = new Date();
-    exp.setDate(exp.getDate() + r.expDays);
-    r.exp = exp; r.dest = S.scanDest;
-    S.scanResult = r;
-    S.scanState = 'detected'; S.aiConf = 99;
-
-    if (S.rapidMode) {
-      S.scanCount++;
-      S.scanHistory.unshift({ ...r, ts: new Date() });
-      if (S.scanHistory.length > 20) S.scanHistory.pop();
-      addToItems(r);
-      speak(r.name);
-      sfx('success'); vibrate([8,40,12]);
-      showToast(`✓ #${S.scanCount}: ${r.name}`, '#2ee6a6');
-    } else {
-      sfx('success'); vibrate([10,40,15]);
-    }
-    updateTabBody();
-  }, 1250);
 }
 
 function updateScanViewport() {
@@ -2015,6 +2001,19 @@ function updateScanViewport() {
 
 function acceptScan() {
   if (!S.scanResult) return;
+  if (S.scanResult.isNew) {
+    const nameEl = document.getElementById('newDrugName');
+    const genEl  = document.getElementById('newDrugGen');
+    const name = nameEl ? nameEl.value.trim() : '';
+    if (!name) {
+      pokaShake(nameEl || document.querySelector('.scan-result-card'));
+      showToast('⚠ กรุณาระบุชื่อยาก่อน', '#ff9f43');
+      return;
+    }
+    S.scanResult.name = name;
+    S.scanResult.gen  = genEl ? genEl.value.trim() : '';
+    delete S.scanResult.isNew;
+  }
   vibrate([8,40,12]); sfx('success');
   speak(S.scanResult.name);
   S.scanHistory.unshift({ ...S.scanResult, ts: new Date() });
@@ -2146,9 +2145,6 @@ function initFirestore() {
   drugsRef
     .orderBy('createdAt', 'asc')
     .onSnapshot(snapshot => {
-      if (!S.firestoreLoaded && snapshot.docs.length === 0) {
-        seedFirestore();
-      }
       S.firestoreLoaded = true;
       const fsItems = snapshot.docs.map(doc => {
         const d = doc.data();
