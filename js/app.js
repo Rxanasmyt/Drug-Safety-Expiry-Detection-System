@@ -41,9 +41,15 @@ const S = {
 
 // ── GEMINI VISION ─────────────────────────────────────
 const DRUG_LABEL_PROMPT = [
-  'วิเคราะห์ภาพฉลากยาและตอบเป็น JSON ดังนี้ (ตอบ JSON เท่านั้น ห้ามอธิบาย):',
-  '{"name":"ชื่อยา trade name","generic":"generic name/INN หรือ null","strength":"ความแรง เช่น 500mg หรือ null","lot":"Lot/Batch number หรือ null","expiry":"วันหมดอายุ YYYY-MM-DD หรือ null","mfd":"วันผลิต YYYY-MM-DD หรือ null","form":"tab|cap|vial|liq|pen หรือ null","gtin":"barcode number หรือ null"}',
-  'กฎ: ปีพุทธศักราช (2565-2569) ลบ 543 เป็น ค.ศ. เช่น 2568→2025 | ตอบ null ถ้าไม่เห็นข้อมูลนั้น | Lot ให้พิมพ์ใหญ่ตรงตามฉลาก',
+  'วิเคราะห์ภาพฉลากยาและตอบเป็น JSON เท่านั้น (ห้ามมี text อื่น ห้ามอธิบาย):',
+  '{"name":"ชื่อยา trade name เช่น AUGMENTIN หรือ Paracetamol","generic":"generic name/INN หรือ null","strength":"ความแรง เช่น 500mg หรือ null","lot":"Lot/Batch number หรือ null","expiry":"วันหมดอายุ YYYY-MM-DD หรือ null","mfd":"วันผลิต YYYY-MM-DD หรือ null","form":"tab|cap|vial|liq|pen หรือ null","gtin":"barcode EAN-13 หรือ null"}',
+  'กฎสำคัญ:',
+  '1. ปีพุทธศักราช (2565-2569) ลบ 543 เป็น ค.ศ. เช่น 2568→2025, 2569→2026, 2570→2027',
+  '2. Lot/Batch: ค้นหา Lot No, Batch No, L/N, B/N, BN, LOT — พิมพ์ตัวอักษร+ตัวเลขครบตามฉลาก เช่น ST68-6470, AB2024001, 240501A',
+  '3. วันหมดอายุ (EXP): ค้นหา EXP, Expiry, Use Before, หมดอายุ, ใช้ก่อน — รองรับ MM/YYYY, MM-YYYY, DD/MM/YYYY, MMM YYYY (APR 2025), YYYY-MM-DD',
+  '4. วันผลิต (MFD): ค้นหา MFG, MFD, Manufactured, Production Date, Mfg Date, วันผลิต — รูปแบบเดียวกับ EXP',
+  '5. ตอบ null ถ้าไม่เห็นหรือข้อมูลนั้นไม่ปรากฏในภาพ',
+  '6. ชื่อยา: ใช้ trade name ที่พิมพ์ชัดบนกล่อง/ซอง ถ้าไม่มี trade name ให้ใช้ generic name',
 ].join('\n');
 
 async function analyzeWithGemini(file) {
@@ -759,13 +765,19 @@ function renderScanResult(r) {
         ${needsExpiry ? `
         ${S.cameraActive ? `
         <div style="font-size:11px;color:#2ee6a6;text-align:center;padding:6px 8px;background:rgba(46,230,166,.1);border-radius:10px;border:1px solid rgba(46,230,166,.3);font-weight:700">
-          🎯 กล้องยังทำงานอยู่ — เล็งที่บาร์โค้ด DataMatrix / QR บนกล่องยาเพื่ออ่านข้อมูลอัตโนมัติ
+          🎯 กล้องทำงานอยู่ — เล็งบาร์โค้ด DataMatrix/QR บนกล่องยาเพื่ออ่านข้อมูลอัตโนมัติ
         </div>` : ''}
-        <button id="ocrCaptureBtn" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,rgba(0,158,158,.18),rgba(56,189,248,.18));border:1.5px solid rgba(0,158,158,.5);color:var(--ink);font-size:12px;font-weight:700;cursor:pointer;margin-top:2px">
-          🤖 ถ่ายรูปกล่องยา — AI อ่านอัตโนมัติ
+        <button id="ocrCaptureBtn" class="ocr-primary-btn">
+          <span style="font-size:32px;line-height:1;flex-shrink:0">📷</span>
+          <span style="flex:1">
+            <span style="display:block;font-size:15px;font-weight:800;color:var(--brand)">ถ่ายภาพยา — AI อ่านอัตโนมัติ</span>
+            <span style="display:block;font-size:11px;color:var(--ink3);margin-top:3px">EXP · LOT · วันผลิต · ชื่อยา ไม่ต้องกรอกเอง</span>
+          </span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </button>
         <input type="file" id="ocrFileInput" accept="image/*" capture="environment" style="display:none">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:2px">
+        <div style="font-size:10px;color:var(--ink3);text-align:center;padding:4px 0 2px;letter-spacing:.3px">— หรือกรอกข้อมูลด้วยตนเอง —</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
           <div>
             <div style="font-size:10px;color:var(--ink3);margin-bottom:4px;font-weight:700">ยาสิ้นอายุ *</div>
             <input id="ean13Expiry" type="date" style="${inpDate}">
@@ -1437,6 +1449,28 @@ function stopCamera() {
 }
 
 // ── OCR AUTO-FILL ─────────────────────────────────────
+let _autoSaveTimer = null;
+function _startAutoSave() {
+  clearTimeout(_autoSaveTimer);
+  if (!S.scanResult) return;
+  let cnt = 3;
+  const btn = document.getElementById('acceptScanBtn');
+  if (btn) btn.classList.add('ai-ready');
+  function tick() {
+    if (!S.scanResult) { if (btn) btn.classList.remove('ai-ready'); return; }
+    if (cnt <= 0) { if (btn) btn.classList.remove('ai-ready'); acceptScan(); return; }
+    showToast(`✓ AI อ่านครบ — บันทึกอัตโนมัติใน ${cnt} วิ · แตะฟอร์มเพื่อยกเลิก`, '#2ee6a6');
+    cnt--;
+    _autoSaveTimer = setTimeout(tick, 1000);
+  }
+  tick();
+  const card = document.querySelector('.scan-result-card');
+  if (card) card.addEventListener('pointerdown', () => {
+    clearTimeout(_autoSaveTimer); _autoSaveTimer = null;
+    if (btn) btn.classList.remove('ai-ready');
+  }, { once: true });
+}
+
 let _tesseract = null;
 async function _loadTesseract() {
   if (_tesseract) return _tesseract;
@@ -1509,8 +1543,14 @@ async function handleOCRFile(file) {
     }
 
     let filled = 0;
-    const set = (id, val) => { const el = document.getElementById(id); if (el && val) { el.value = val; filled++; } };
-    const setIfEmpty = (id, val) => { const el = document.getElementById(id); if (el && val && !el.value) { el.value = val; filled++; } };
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val) { el.value = val; el.classList.add('ai-filled'); filled++; }
+    };
+    const setIfEmpty = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val && !el.value) { el.value = val; el.classList.add('ai-filled'); filled++; }
+    };
 
     setIfEmpty('newDrugName', parsed.name);
     setIfEmpty('newDrugGen',  parsed.generic);
@@ -1520,7 +1560,13 @@ async function handleOCRFile(file) {
 
     if (filled > 0) {
       vibrate([8, 30, 8]); sfx('success');
-      showToast(`✓ AI อ่านได้ ${filled} ช่อง — ตรวจสอบก่อนยืนยัน`, '#2ee6a6');
+      const expVal = document.getElementById('ean13Expiry')?.value;
+      const nameOk = !!(S.scanResult?.name || document.getElementById('newDrugName')?.value?.trim());
+      if (expVal && nameOk && S.scanResult) {
+        _startAutoSave();
+      } else {
+        showToast(`✓ AI อ่านได้ ${filled} ช่อง — ตรวจสอบก่อนยืนยัน`, '#2ee6a6');
+      }
     } else {
       showToast('⚠ อ่านไม่พบข้อมูล — ถ่ายให้ชัดขึ้นหรือกรอกเอง', '#ff9f43');
     }
@@ -1579,7 +1625,7 @@ async function handlePhotoScan(file) {
     bumpStreak(); detectStress();
     vibrate([8,40,12]);
     const found = [data.name, data.lot, data.expiry].filter(Boolean).length;
-    showToast(`🤖 AI อ่านได้ ${found} ช้อมูล — ตรวจสอบก่อนบันทึก`, '#2ee6a6');
+    showToast(`🤖 AI อ่านได้ ${found} ข้อมูล — ตรวจสอบก่อนบันทึก`, '#2ee6a6');
     updateTabBody();
     requestAnimationFrame(() => {
       document.querySelector('.scan-result-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1587,6 +1633,10 @@ async function handlePhotoScan(file) {
         const first = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
         if (first) first.focus();
       }, 80);
+      // If Gemini extracted all required data, start auto-save countdown
+      if (!result.needsExpiry && result.name && !result.isNew) {
+        setTimeout(() => _startAutoSave(), 600);
+      }
     });
   } catch(e) {
     console.warn('Photo scan error:', e);
@@ -2294,6 +2344,7 @@ function processBarcode(rawText, formatName) {
   }
 
   setTimeout(() => {
+    if (hasGS1) return; // GS1 already has full data — skip decorative animation
     if (S.scanState !== 'detecting') return;
     sfx('tick'); vibrate(6);
     S.scanState = 'lockon'; S.aiConf = 60;
@@ -2301,6 +2352,7 @@ function processBarcode(rawText, formatName) {
   }, 120);
 
   setTimeout(() => {
+    if (hasGS1) return; // GS1 already has full data — skip decorative animation
     if (S.scanState !== 'lockon') return;
     sfx('tick'); vibrate(4);
     S.scanState = 'decoding'; S.aiConf = 75;
@@ -2318,7 +2370,8 @@ function processBarcode(rawText, formatName) {
   }, 350);
 
   setTimeout(() => {
-    if (!['lockon','decoding'].includes(S.scanState)) return;
+    if (S.scanState === 'detected') return; // already handled (fast path)
+    if (!hasGS1 && !['lockon','decoding'].includes(S.scanState)) return;
     let result;
     if (hasGS1) {
       result = buildResultFromGS1(gs1, rawText);
@@ -2396,16 +2449,20 @@ function processBarcode(rawText, formatName) {
       vibrate([10,40,15]);
     }
     updateTabBody();
-    // Scroll result card into view and focus first required input
+    // Scroll result card into view; focus OCR button for EAN-13 so user just taps it
     requestAnimationFrame(() => {
       const card = document.querySelector('.scan-result-card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       setTimeout(() => {
+        if (result.needsExpiry) {
+          const ocrBtn = document.getElementById('ocrCaptureBtn');
+          if (ocrBtn) { ocrBtn.focus(); return; }
+        }
         const firstInput = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
         if (firstInput) firstInput.focus();
       }, 80);
     });
-  }, 600);
+  }, hasGS1 ? 80 : 600);
 }
 
 function updateScanViewport() {
