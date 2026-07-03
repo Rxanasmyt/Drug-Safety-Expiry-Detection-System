@@ -25,6 +25,34 @@ self.addEventListener('activate', e => {
   );
 });
 
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data?.json() ?? {}; } catch(_) {}
+  const title = data.title || 'PharmaCare — แจ้งเตือนยา';
+  const body  = data.body  || 'มียาใกล้หมดอายุหรือหมดอายุแล้ว กรุณาตรวจสอบ';
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/icons/icon.svg',
+      badge: '/icons/icon.svg',
+      tag: 'pharmacare-alert',
+      requireInteraction: !!data.critical,
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/';
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      const existing = list.find(c => c.url.startsWith(self.registration.scope));
+      return existing ? existing.focus() : clients.openWindow(url);
+    })
+  );
+});
+
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);

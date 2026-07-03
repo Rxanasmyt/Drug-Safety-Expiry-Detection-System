@@ -255,21 +255,6 @@ function renderLockProfiles() {
           </div>
         </div>
 
-        <button class="face-btn" id="faceBtnMain">
-          <div class="face-btn-inner">
-            <div class="face-icon-wrap">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/>
-                <path d="M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 0 0 5 0"/>
-              </svg>
-            </div>
-            <div class="face-btn-text">
-              <div class="face-btn-title">สแกนใบหน้าเข้าระบบ</div>
-              <div class="face-btn-sub">Face ID · เร็วที่สุด · แตะแล้วมองกล้อง</div>
-            </div>
-            <div class="face-btn-arrow">›</div>
-          </div>
-        </button>
 
         <div class="lock-divider">
           <div class="lock-divider-line" style="background:linear-gradient(90deg,transparent,rgba(0,158,158,.35))"></div>
@@ -279,14 +264,6 @@ function renderLockProfiles() {
 
         <div class="profile-grid">${profiles}</div>
 
-        <div class="lock-secondary">
-          <button class="lock-sec-btn" id="lockScanBadge">
-            <span class="lock-sec-icon">🪪</span>สแกนป้ายชื่อ
-          </button>
-          <button class="lock-sec-btn" id="lockPasskey">
-            <span class="lock-sec-icon">🔑</span>Passkey
-          </button>
-        </div>
 
         <div class="lock-credit">
           <div class="lock-credit-divider">
@@ -330,11 +307,7 @@ function renderPinScreen() {
   }).join('');
 
   const keyBtns = keys.map((k, i) => {
-    if (k === 'face') return `<button class="pin-key-face" id="pinFaceBtn">
-      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 0 0 5 0"/>
-      </svg>
-    </button>`;
+    if (k === 'face') return `<div class="pin-key-spacer"></div>`;
     if (k === 'del') return `<button class="pin-key-del" id="pinDel" style="opacity:${S.pin.length>0?1:.3}">⌫</button>`;
     return `<button class="pin-key" data-key="${k}">${k}</button>`;
   }).join('');
@@ -358,8 +331,7 @@ function renderPinScreen() {
       </div>
       <div class="pin-keypad">${keyBtns}</div>
       <div class="pin-hint">
-        <div class="pin-hint-text">ใส่ PIN 4 หลัก · PIN ทดลอง: ${u.pin}</div>
-        <div class="pin-faceid-hint">กดไอคอนใบหน้า เพื่อใช้ Face ID</div>
+        <div class="pin-hint-text">ใส่ PIN 4 หลัก</div>
       </div>
     </div>`;
 }
@@ -441,6 +413,15 @@ function renderApp() {
 
   const focusChip = `<button class="focus-chip${fm?' active':''}" id="focusChipBtn" title="Focus Mode — ${fm?'เปิด':'ปิด'}">◎ ${fm?'Focus':'Auto'}</button>`;
 
+  const redItems = S.items.filter(it => itemStatus(it).key === 'RED');
+  const orangeItems = S.items.filter(it => itemStatus(it).key === 'ORANGE');
+  let alertBannerHTML = '';
+  if (redItems.length > 0) {
+    alertBannerHTML = `<div class="alert-banner alert-banner-red" id="alertBanner">⛔ ยาหมดอายุ/ห้ามใช้ ${redItems.length} รายการ — ดำเนินการทันที</div>`;
+  } else if (orangeItems.length > 0) {
+    alertBannerHTML = `<div class="alert-banner alert-banner-orange" id="alertBanner">⚠ ยาใกล้หมดอายุ ${orangeItems.length} รายการ — ตรวจสอบคลัง</div>`;
+  }
+
   return `
     <div id="app-screen">
       <div id="app-topbar">
@@ -464,6 +445,7 @@ function renderApp() {
         </button>
         <button class="topbar-btn" id="lockBtn" aria-label="ล็อกหน้าจอ">⏻</button>
       </div>
+      ${alertBannerHTML}
       <div id="app-body">
         <div class="tab-pane" id="tab-body">${bodyHTML}</div>
       </div>
@@ -666,15 +648,6 @@ function renderScanTab() {
     ${statsHTML}
     ${historyHTML}
 
-    <!-- Voice command bar -->
-    <div class="voice-bar${S.voiceActive?' active-state':''}" id="voiceBar">
-      <button class="voice-btn${S.voiceActive?' active-rec':' idle'}" id="voiceBtn">${S.voiceActive?'⏹':'🎤'}</button>
-      <div class="voice-info">
-        <div class="voice-title">${S.voiceActive?'กำลังฟัง… พูดคำสั่งได้เลย':'Voice Command · AI ฟังคำสั่งเสียง'}</div>
-        <div class="voice-sub">"รับยา", "โอน", "ยาแดง", "HIGH-ALERT", "สรุปเวร"…</div>
-      </div>
-      <div class="waveform-bars">${waveHTML}</div>
-    </div>
 
     ${resultHTML}`;
 }
@@ -919,7 +892,7 @@ function renderDashTab() {
     .sort((a,b) => daysLeft(a.exp) - daysLeft(b.exp));
 
   const kpiData = [
-    { icon:'💊', bg:'rgba(0,158,158,.15)', val:all.length, label:'ยาทั้งหมด', trend:'+2', trendC:'#2ee6a6' },
+    { icon:'💊', bg:'rgba(0,158,158,.15)', val:all.length, label:'ยาทั้งหมด', trend:'', trendC:'#2ee6a6' },
     { icon:'🔴', bg:'rgba(255,77,94,.15)', val:counts.RED, label:'ห้ามใช้/หมดอายุ', trend: counts.RED > 0 ? '!' : '✓', trendC: counts.RED > 0 ? '#ff4d5e' : '#2ee6a6' },
     { icon:'🟠', bg:'rgba(255,159,67,.15)', val:counts.ORANGE, label:'คืนบริษัท', trend:'', trendC:'#ff9f43' },
     { icon:'🟢', bg:'rgba(46,230,166,.15)', val:counts.GREEN, label:'ปลอดภัย', trend:'', trendC:'#2ee6a6' },
@@ -1237,6 +1210,7 @@ function bindApp() {
     vibrate(6); S.sheet = 'notif'; renderAppBody(); updateNavTabs();
   });
   document.getElementById('lockBtn')?.addEventListener('click', () => {
+    try { localStorage.removeItem('session'); } catch(e) {}
     S.screen = 'lock'; S.user = null; S.loginStep = 'profiles'; renderScreen();
   });
   document.getElementById('cmdBtn')?.addEventListener('click', () => openCmdPalette());
@@ -1685,6 +1659,13 @@ function bindStockTab() {
   if (bulkBtn) bulkBtn.addEventListener('click', bulkTransfer);
 }
 
+function saveSettings() {
+  try {
+    localStorage.setItem('settings', JSON.stringify(S.settings));
+    localStorage.setItem('autoLockMins', String(S.autoLockMins));
+  } catch(e) {}
+}
+
 function bindCfgTab() {
   document.querySelectorAll('.theme-btn[data-theme]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1696,11 +1677,13 @@ function bindCfgTab() {
   if (soundToggle) soundToggle.addEventListener('click', () => {
     vibrate(6);
     S.settings.soundOn = !S.settings.soundOn;
+    saveSettings();
     updateTabBody();
   });
   document.querySelectorAll('.autolock-btn[data-lock]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); S.autoLockMins = parseInt(btn.dataset.lock);
+      saveSettings();
       updateTabBody();
     });
   });
@@ -1709,6 +1692,7 @@ function bindCfgTab() {
       S.settings[e.target.dataset.thresh] = parseInt(e.target.value);
       const label = e.target.closest('.thresh-row')?.querySelector('.thresh-val');
       if (label) label.textContent = e.target.value + ' วัน';
+      saveSettings();
     });
   });
 }
@@ -1909,6 +1893,10 @@ function doLogin(u) {
   S.user = u; S.screen = 'app'; S.tab = 'scan';
   S.loginStep = 'profiles'; S.pin = ''; S.faceStage = 'scanning';
   S.lastActivity = Date.now();
+  try { localStorage.setItem('session', JSON.stringify({ uid: u.id, exp: Date.now() + 8*3600*1000 })); } catch(e) {}
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
   renderScreen();
   handoffListen();
   showToast(`ยินดีต้อนรับ ${u.name}`, u.color);
@@ -2137,7 +2125,7 @@ function processBarcode(rawText, formatName) {
     sfx('tick'); vibrate(6);
     S.scanState = 'lockon'; S.aiConf = 60;
     updateScanViewport();
-  }, 380);
+  }, 120);
 
   setTimeout(() => {
     if (S.scanState !== 'lockon') return;
@@ -2154,7 +2142,7 @@ function processBarcode(rawText, formatName) {
       if (bar) bar.style.strokeDashoffset = 201 - (201 * c / 100);
       if (c >= 98) clearInterval(tick);
     }, 80);
-  }, 680);
+  }, 350);
 
   setTimeout(() => {
     if (!['lockon','decoding'].includes(S.scanState)) return;
@@ -2218,12 +2206,19 @@ function processBarcode(rawText, formatName) {
     }
 
     if (S.rapidMode) {
-      S.scanCount++;
-      S.scanHistory.unshift({ ...result, ts: new Date() });
-      if (S.scanHistory.length > 20) S.scanHistory.pop();
-      addToItems(result);
-      vibrate([8,40,12]);
-      showToast(`✓ #${S.scanCount}: ${result.name}`, _st.c);
+      if (result.needsExpiry || result.isNew) {
+        showToast('กรอกข้อมูลให้ครบก่อนบันทึก (ขาดชื่อยา/วันหมดอายุ)', '#ff9f43');
+        vibrate([10,40,15]);
+      } else {
+        S.scanCount++;
+        S.scanHistory.unshift({ ...result, ts: new Date() });
+        if (S.scanHistory.length > 20) S.scanHistory.pop();
+        addToItems(result);
+        addLog('รับยา (Rapid)', `${result.name} · Lot ${result.lot}`);
+        saveToFirestore(result);
+        vibrate([8,40,12]);
+        showToast(`✓ #${S.scanCount}: ${result.name}`, _st.c);
+      }
     } else {
       vibrate([10,40,15]);
     }
@@ -2235,9 +2230,9 @@ function processBarcode(rawText, formatName) {
       setTimeout(() => {
         const firstInput = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
         if (firstInput) firstInput.focus();
-      }, 350);
+      }, 80);
     });
-  }, 1050);
+  }, 600);
 }
 
 function updateScanViewport() {
@@ -2480,11 +2475,30 @@ function initFirestore() {
       });
       if (fsItems.length > 0) S.items = fsItems;
       S.offlineMode = false;
-      if (S.screen === 'app') { renderAppBody(); updateNavTabs(); }
+      if (S.screen === 'app') { renderAppBody(); updateNavTabs(); updateEdgeGlow(); }
+      checkAndNotify();
     }, err => {
       console.warn('Firestore error:', err.message);
       S.offlineMode = true;
     });
+}
+
+let _lastNotifKey = '';
+function checkAndNotify() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const red = S.items.filter(it => itemStatus(it).key === 'RED');
+  const orange = S.items.filter(it => itemStatus(it).key === 'ORANGE');
+  if (red.length === 0 && orange.length === 0) return;
+  const key = `${red.length}-${orange.length}`;
+  if (key === _lastNotifKey) return;
+  _lastNotifKey = key;
+  const title = red.length > 0 ? `⛔ ยาหมดอายุ ${red.length} รายการ` : `⚠ ยาใกล้หมดอายุ ${orange.length} รายการ`;
+  const body = red.length > 0
+    ? red.slice(0,3).map(it => `• ${it.name} (${daysLeft(it.exp) < 0 ? 'หมดอายุแล้ว' : `เหลือ ${daysLeft(it.exp)} วัน`})`).join('\n')
+    : orange.slice(0,3).map(it => `• ${it.name} · ${daysLeft(it.exp)} วัน`).join('\n');
+  try {
+    new Notification(title, { body, icon: '/icons/icon.svg', tag: 'pharmacare-alert', requireInteraction: red.length > 0 });
+  } catch(e) {}
 }
 
 async function saveToFirestore(item) {
@@ -2531,6 +2545,7 @@ function initAutoLock() {
     if (idle >= S.autoLockMins) {
       speak('ล็อกหน้าจออัตโนมัติ');
       addLog('Auto-lock', `ไม่มีการใช้งาน ${S.autoLockMins} นาที`);
+      try { localStorage.removeItem('session'); } catch(e) {}
       S.screen = 'lock'; S.user = null;
       renderScreen();
     }
@@ -3182,7 +3197,25 @@ function renderDesktopPanel() {
 // ── BOOTSTRAP ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(S.theme);
-  // S.items starts empty — data comes from Firestore only
+
+  // Restore persisted settings
+  try {
+    const savedSettings = JSON.parse(localStorage.getItem('settings') || 'null');
+    if (savedSettings) Object.assign(S.settings, savedSettings);
+    const savedLock = parseInt(localStorage.getItem('autoLockMins'));
+    if (savedLock > 0) S.autoLockMins = savedLock;
+  } catch(e) {}
+
+  // Restore session if valid (8h window)
+  try {
+    const sess = JSON.parse(localStorage.getItem('session') || 'null');
+    if (sess && sess.exp > Date.now()) {
+      const u = S.users.find(x => x.id === sess.uid);
+      if (u) {
+        S.user = u; S.screen = 'app'; S.lastActivity = Date.now();
+      }
+    }
+  } catch(e) {}
 
   // Status bar clock
   setInterval(updateClock, 10000);
@@ -3203,4 +3236,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Try Firestore
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
+
+  // If session was restored, start Firestore listener now
+  if (S.screen === 'app' && S.user) {
+    try { handoffListen(); } catch(e) {}
+  }
 });
