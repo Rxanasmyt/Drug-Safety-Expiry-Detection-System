@@ -146,7 +146,7 @@ function medAvatarHTML(it, size) {
 }
 function fmtDate(d) {
   if (!d) return '—';
-  return new Date(d).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' });
+  return new Date(d).toLocaleDateString('th-TH-u-ca-gregory', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function fmtTime(d) {
   return [d.getHours(), d.getMinutes()].map(x => ('0'+x).slice(-2)).join(':');
@@ -987,7 +987,7 @@ function renderDashTab() {
     <div class="dash-section-title" style="margin-top:20px"><span>📊 สัดส่วนสถานะยา</span></div>
     ${renderStatusRing(counts, total)}
     <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:14px;font-family:'JetBrains Mono',monospace">
-      อัปเดต ${currentTime()} · ${new Date().toLocaleDateString('th-TH')}
+      อัปเดต ${currentTime()} · ${new Date().toLocaleDateString('th-TH-u-ca-gregory', { day:'2-digit', month:'short', year:'numeric' })}
     </div>`;
 }
 
