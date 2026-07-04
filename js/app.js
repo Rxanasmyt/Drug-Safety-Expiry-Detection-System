@@ -41,15 +41,31 @@ const S = {
 
 // ── GEMINI VISION ─────────────────────────────────────
 const DRUG_LABEL_PROMPT = [
-  'วิเคราะห์ภาพฉลากยาและตอบเป็น JSON เท่านั้น (ห้ามมี text อื่น ห้ามอธิบาย):',
-  '{"name":"ชื่อยา trade name เช่น AUGMENTIN หรือ Paracetamol","generic":"generic name/INN หรือ null","strength":"ความแรง เช่น 500mg หรือ null","lot":"Lot/Batch number หรือ null","expiry":"วันหมดอายุ YYYY-MM-DD หรือ null","mfd":"วันผลิต YYYY-MM-DD หรือ null","form":"tab|cap|vial|liq|pen หรือ null","gtin":"barcode EAN-13 หรือ null"}',
-  'กฎสำคัญ:',
-  '1. ปีพุทธศักราช (2565-2569) ลบ 543 เป็น ค.ศ. เช่น 2568→2025, 2569→2026, 2570→2027',
-  '2. Lot/Batch: ค้นหา Lot No, Batch No, L/N, B/N, BN, LOT — พิมพ์ตัวอักษร+ตัวเลขครบตามฉลาก เช่น ST68-6470, AB2024001, 240501A',
-  '3. วันหมดอายุ (EXP): ค้นหา EXP, Expiry, Use Before, หมดอายุ, ใช้ก่อน — รองรับ MM/YYYY, MM-YYYY, DD/MM/YYYY, MMM YYYY (APR 2025), YYYY-MM-DD',
-  '4. วันผลิต (MFD): ค้นหา MFG, MFD, Manufactured, Production Date, Mfg Date, วันผลิต — รูปแบบเดียวกับ EXP',
-  '5. ตอบ null ถ้าไม่เห็นหรือข้อมูลนั้นไม่ปรากฏในภาพ',
-  '6. ชื่อยา: ใช้ trade name ที่พิมพ์ชัดบนกล่อง/ซอง ถ้าไม่มี trade name ให้ใช้ generic name',
+  'คุณเป็น AI ผู้เชี่ยวชาญอ่านฉลากยาไทย ตอบเป็น JSON บรรทัดเดียวเท่านั้น ห้ามอธิบายหรือมีข้อความอื่น:',
+  '{"name":"ชื่อยา","generic":"generic name หรือ null","strength":"ความแรง หรือ null","lot":"Lot number หรือ null","expiry":"YYYY-MM-DD หรือ null","mfd":"YYYY-MM-DD หรือ null","form":"tab|cap|vial|liq|sach|pen หรือ null","gtin":"13 digits หรือ null"}',
+  '',
+  '### รูปแบบวันที่บนยาไทย (ต้องอ่านให้ได้ทุกแบบ)',
+  'แบบ A — DD MM YY เว้นวรรค (พบบ่อยที่สุดบนยาไทย): "06 02 25"=2025-02-06 | "06 02 27"=2027-02-06 | "12 08 26"=2026-08-12',
+  'แบบ B — DD/MM/YY หรือ DD-MM-YY: "06/02/25"=2025-02-06 | "15-03-27"=2027-03-15',
+  'แบบ C — MM/YYYY: "02/2025"=2025-02-01 | "08/2027"=2027-08-01',
+  'แบบ D — MMM YYYY: "FEB 2025"=2025-02-01 | "APR 2027"=2027-04-01 | "ก.พ. 2568"=2025-02-01',
+  'แบบ E — ปีพุทธศักราช: ลบ 543 → 2568=2025, 2569=2026, 2570=2027',
+  '',
+  '### ถ้าเห็น 2 วันที่ไม่มีป้าย EXP/MFD',
+  'วันที่น้อยกว่า (ปีเก่ากว่า) = mfd (วันผลิต) | วันที่มากกว่า (ปีใหม่กว่า) = expiry (วันหมดอายุ)',
+  'ตัวอย่าง: บรรทัด "06 02 25" และ "06 02 27" → mfd=2025-02-06, expiry=2027-02-06',
+  '',
+  '### Lot/Batch number',
+  'ค้นหาคำ: Lot, LOT, Lot No, L/N, Batch, Batch No, B.No, BN, ครั้งที่ผลิต',
+  'รูปแบบที่พบ: T680094 | ST68-6470 | 240501A | AB2024001 | Osra5.5_sac_LAO_22R01',
+  'ถ้าเห็นกลุ่มตัวอักษร+ตัวเลขบรรทัดเดียวที่ไม่ใช่วันที่ ไม่ใช่ชื่อยา ให้ถือว่าเป็น Lot',
+  '',
+  '### GTIN (barcode number)',
+  'อ่านตัวเลข 13 หลักที่พิมพ์ใต้เส้นบาร์โค้ด เช่น 8850678234915 | 8851824821027 | 8859651450017',
+  '',
+  '### ชื่อยา',
+  'ใช้ trade name ที่พิมพ์ใหญ่ที่สุดบนฉลาก หรือ generic name ถ้าไม่มี trade name',
+  'ตอบ null ทุก field ที่ไม่มีข้อมูลในภาพ ห้ามเดา',
 ].join('\n');
 
 async function analyzeWithGemini(file) {
@@ -616,7 +632,7 @@ function renderScanTab() {
     </div>` : '';
 
   const resultHTML = S.scanResult ? renderScanResult(S.scanResult)
-    : idle ? `<div class="scan-empty"><div class="scan-empty-icon">🔬</div>ยังไม่มีรายการสแกน<br><span style="font-size:11px;color:var(--ink3)">เปิดกล้องสแกนบาร์โค้ด หรือกรอกรหัสด้วยตนเอง</span></div>` : '';
+    : idle ? `<div class="scan-empty"><div class="scan-empty-icon">📷</div>กดถ่ายภาพฉลากยา<br><span style="font-size:11px;color:var(--ink3)">AI อ่านชื่อยา · EXP · LOT · วันผลิต ได้ครบในภาพเดียว</span></div>` : '';
 
   /* voice waveform bars */
   const waveHTML = [18,26,22,28,20,24,16].map((_,i) =>
@@ -629,66 +645,62 @@ function renderScanTab() {
       <button class="dest-btn" data-dest="FRONT_SHELF" style="color:${dest==='FRONT_SHELF'?'#fff':'var(--ink3)'}">🛎 FRONT SHELF · เคาน์เตอร์</button>
     </div>
 
-    <!-- AI SCANNER VIEWPORT -->
-    <div class="scan-viewport sv-${state}${S.cameraActive?' cam-active':''}" id="scanViewport" style="height:${S.cameraActive?'390px':scanning?'310px':'280px'}">
+    <!-- ═══ HERO: AI Photo Scan — PRIMARY ACTION ═══ -->
+    <button id="photoScanBtn" class="hero-photo-btn" ${scanning?'disabled style="opacity:.55"':''}>
+      <div class="hero-photo-icon-wrap">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </div>
+      <div class="hero-photo-text">
+        <div class="hero-photo-title">ถ่ายภาพฉลากยา</div>
+        <div class="hero-photo-sub">AI อ่าน ชื่อยา · EXP · LOT · วันผลิต ครบในภาพเดียว</div>
+      </div>
+      <svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+    <input type="file" id="photoScanInput" accept="image/*" capture="environment" style="display:none">
+
+    <!-- SECONDARY: barcode scanner + manual -->
+    <div class="scan-secondary-row">
+      <button class="scan-btn-secondary" id="camToggleBtn">
+        <span>${S.cameraActive?'🔴':'📡'}</span>${S.cameraActive?'ปิดกล้อง':'สแกนบาร์โค้ด GS1'}
+      </button>
+      <button class="scan-btn-secondary" id="barcodeInputBtn">
+        <span>⌨</span>กรอกรหัส
+      </button>
+      <button class="scan-btn-secondary" id="manualEntryBtn">
+        <span>✎</span>กรอกเอง
+      </button>
+    </div>
+
+    <!-- Camera viewport — shown only when active or scanning -->
+    ${(S.cameraActive || scanning) ? `
+    <div class="scan-viewport sv-${state}${S.cameraActive?' cam-active':''}" id="scanViewport" style="height:${S.cameraActive?'360px':'280px'}">
       <div class="scan-vp-bg"></div>
       <div class="scan-ai-grid"></div>
       ${!S.cameraActive ? `<div class="scan-barcode-bg">${barcodeH}</div>` : ''}
       <div class="scan-laser-beam"></div>
       ${confRing}
-
-      <!-- Live camera indicator -->
       ${S.cameraActive ? `<div class="live-cam-indicator"><div class="live-cam-dot"></div>LIVE · ZXing AI</div>` : ''}
-
-      <!-- Camera video container -->
       <div id="camContainer" style="position:absolute;inset:0;display:${S.cameraActive?'block':'flex'};flex-direction:column;align-items:center;justify-content:center;gap:8px">
         ${!S.cameraActive ? `
-          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="rgba(0,158,158,.4)" stroke-width="1" style="margin-top:8px">
+          <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="rgba(0,158,158,.4)" stroke-width="1" style="margin-top:8px">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
-          </svg>
-          <div style="font-size:11px;color:rgba(0,158,158,.55);font-weight:600">กล้องยังไม่เปิด</div>` : ''}
+          </svg>` : ''}
       </div>
-
-      <!-- Scan reticle + corners -->
       <div class="scan-reticle" style="width:${S.cameraActive?'200px':'170px'};height:${S.cameraActive?'174px':'148px'}">
         ${corners}
         ${detected ? `<div class="scan-success-ring"></div><div class="scan-check">✓</div>` : ''}
         ${scanning ? '<div class="scan-laser-beam" style="position:relative;animation-duration:1.4s;inset:unset;box-shadow:none;width:100%;height:1px"></div>' : ''}
       </div>
-
-      <!-- Phase badge -->
       <div class="scan-phase-badge" style="background:${phaseInfo.bg};border-color:${phaseInfo.border};color:${phaseInfo.c}">
         ${phaseInfo.label}
       </div>
     </div>
-
-    <!-- Format selector -->
     <div class="scan-format-row">${formatChips}</div>
-
-    <!-- Action buttons -->
-    <div class="scan-actions-3">
-      <button class="scan-btn-primary" id="barcodeInputBtn" style="background:linear-gradient(135deg,${destC},${destC}bb);box-shadow:0 10px 28px -8px ${destC}77;${scanning?'opacity:.65;pointer-events:none':''}">
-        <span style="font-size:17px">⌨</span>กรอกบาร์โค้ด
-      </button>
-      <button class="scan-btn-cam${S.cameraActive?' active':''}" id="camToggleBtn">
-        <span style="font-size:16px">${S.cameraActive?'🔴':'📷'}</span>${S.cameraActive?'ปิดกล้อง':'กล้องจริง'}
-      </button>
-      <button class="scan-btn-manual" id="manualEntryBtn">
-        <span style="font-size:15px">✎</span>กรอกเอง
-      </button>
-    </div>
-
-    <!-- AI Photo Scan — ถ่ายรูปยาโดยตรง ไม่ต้องสแกนบาร์โค้ดก่อน -->
-    <button id="photoScanBtn" style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 16px;border-radius:14px;background:linear-gradient(135deg,rgba(0,158,158,.14),rgba(56,189,248,.14));border:1.5px solid rgba(0,158,158,.5);color:var(--ink);font-size:13px;font-weight:700;cursor:pointer;font-family:'Sarabun',sans-serif;box-shadow:0 4px 16px -6px rgba(0,158,158,.25)">
-      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#009E9E,#38bdf8);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px">🤖</div>
-      <div style="flex:1;text-align:left">
-        <div>ถ่ายรูปยา — AI อ่านข้อมูลทั้งหมด</div>
-        <div style="font-size:10px;color:var(--ink3);font-weight:500;margin-top:1px">ชื่อยา · EXP · LOT · วันผลิต อัตโนมัติ ไม่ต้องสแกนบาร์โค้ด</div>
-      </div>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="2.5" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
-    </button>
-    <input type="file" id="photoScanInput" accept="image/*" capture="environment" style="display:none">
+    ` : ''}
 
     <!-- Rapid scan toggle -->
     <div class="rapid-row${S.rapidMode?' active':''}" id="rapidRow">
@@ -1587,22 +1599,32 @@ async function handlePhotoScan(file) {
     return;
   }
   const btn = document.getElementById('photoScanBtn');
-  if (btn) { btn.innerHTML = '<span style="font-size:14px">⏳</span> AI กำลังอ่าน...'; btn.disabled = true; }
+  const origBtnHTML = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.innerHTML = `<div class="hero-photo-icon-wrap" style="width:40px;height:40px"><span style="font-size:20px">⏳</span></div><div class="hero-photo-text"><div class="hero-photo-title">AI กำลังอ่านฉลาก...</div><div class="hero-photo-sub">กรุณารอสักครู่</div></div>`;
+    btn.disabled = true;
+    btn.style.animation = 'none';
+    btn.style.opacity = '.8';
+  }
   showToast('🤖 AI กำลังวิเคราะห์ฉลากยา...', '#7c6cff');
   try {
     const data = await analyzeWithGemini(file);
-    if (!data || (!data.name && !data.expiry)) {
-      showToast('⚠ ไม่พบข้อมูลยา — ถ่ายฉลากให้ชัดขึ้น', '#ff9f43');
+    if (!data || (!data.name && !data.expiry && !data.lot)) {
+      showToast('⚠ AI อ่านไม่พบข้อมูล — ถ่ายให้เห็นฉลากชัดขึ้น ไม่มีแสงสะท้อน', '#ff9f43');
       return;
     }
     const exp = data.expiry ? new Date(data.expiry) : null;
     const mfd = data.mfd ? new Date(data.mfd) : null;
-    const existing = data.gtin ? S.items.find(i => i.gtin === data.gtin || i.barcode === data.gtin) : null;
+    // Look up by GTIN first, then by name match in inventory
+    const byGtin = data.gtin ? S.items.find(i => i.gtin === data.gtin || i.barcode === data.gtin) : null;
+    const byName = !byGtin && data.name ? S.items.find(i => i.name?.toLowerCase() === data.name?.toLowerCase()) : null;
+    const existing = byGtin || byName;
     const result = {
       name:      data.name || existing?.name || '',
       gen:       data.generic || existing?.gen || '',
-      gtin:      data.gtin || '',
-      barcode:   data.gtin || '',
+      strength:  data.strength || existing?.strength || '',
+      gtin:      data.gtin || existing?.gtin || '',
+      barcode:   data.gtin || existing?.gtin || '',
       lot:       data.lot || '',
       exp,
       mfd,
@@ -1610,10 +1632,10 @@ async function handlePhotoScan(file) {
       dest:      S.scanDest,
       highAlert: existing?.highAlert || false,
       lasa:      existing?.lasa || false,
-      cold:      (data.storage||'').toLowerCase().includes('refrig') || (existing?.cold) || false,
+      cold:      existing?.cold || false,
       _fromScan: true,
       _fromAI:   true,
-      isNew:     !existing,
+      isNew:     !existing && !data.name,
       needsExpiry: !exp || !data.lot,
     };
     S.scanResult = result;
@@ -1624,17 +1646,25 @@ async function handlePhotoScan(file) {
     handoffWrite(result, _st);
     bumpStreak(); detectStress();
     vibrate([8,40,12]);
-    const found = [data.name, data.lot, data.expiry].filter(Boolean).length;
-    showToast(`🤖 AI อ่านได้ ${found} ข้อมูล — ตรวจสอบก่อนบันทึก`, '#2ee6a6');
+    const gotFields = [data.name, data.lot, data.expiry, data.mfd].filter(Boolean);
+    if (gotFields.length >= 3) {
+      showToast(`✅ AI อ่านได้ ${gotFields.length} รายการ — ตรวจสอบก่อนบันทึก`, '#2ee6a6');
+    } else if (gotFields.length > 0) {
+      showToast(`🤖 AI อ่านได้ ${gotFields.length} รายการ — กรอกส่วนที่เหลือ`, '#ff9f43');
+    }
     updateTabBody();
     requestAnimationFrame(() => {
       document.querySelector('.scan-result-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       setTimeout(() => {
+        if (result.needsExpiry) {
+          const ocrBtn = document.getElementById('ocrCaptureBtn');
+          if (ocrBtn) { ocrBtn.focus(); return; }
+        }
         const first = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
         if (first) first.focus();
       }, 80);
-      // If Gemini extracted all required data, start auto-save countdown
-      if (!result.needsExpiry && result.name && !result.isNew) {
+      // Auto-save if all required data is complete
+      if (!result.needsExpiry && result.name) {
         setTimeout(() => _startAutoSave(), 600);
       }
     });
@@ -1643,7 +1673,12 @@ async function handlePhotoScan(file) {
     const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
     showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
   } finally {
-    if (btn) { btn.innerHTML = '🤖 ถ่ายรูปยา — AI อ่านข้อมูลทั้งหมด'; btn.disabled = false; }
+    if (btn) {
+      btn.innerHTML = origBtnHTML || `<div class="hero-photo-icon-wrap"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><div class="hero-photo-text"><div class="hero-photo-title">ถ่ายภาพฉลากยา</div><div class="hero-photo-sub">AI อ่าน ชื่อยา · EXP · LOT · วันผลิต ครบในภาพเดียว</div></div><svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`;
+      btn.disabled = false;
+      btn.style.animation = '';
+      btn.style.opacity = '';
+    }
   }
 }
 
