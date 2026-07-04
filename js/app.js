@@ -660,6 +660,10 @@ function renderScanTab() {
       <svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
     </button>
     <input type="file" id="photoScanInput" accept="image/*" capture="environment" style="display:none">
+    <div class="photo-guide-tip">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink3)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>ถ่ายด้านที่มีชื่อยาให้ชัด — ไม่ใช่แค่ด้านบาร์โค้ด · AI อ่านชื่อยา + EXP + LOT ในภาพเดียว</span>
+    </div>
 
     <!-- SECONDARY: barcode scanner + manual -->
     <div class="scan-secondary-row">
@@ -766,6 +770,17 @@ function renderScanResult(r) {
       ${(r.isNew || needsExpiry) ? `
       <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:2px;animation:typeReveal .3s ease">
         ${r.isNew ? `
+        ${r._missingName ? `
+        <div class="name-photo-row">
+          <div class="name-photo-hint">💡 AI ยังไม่เจอชื่อยา — ลองถ่ายด้านที่มีชื่อยาเพิ่มได้เลย</div>
+          <button id="namePhotoBtn" class="name-photo-btn">
+            <span style="font-size:20px;line-height:1">📷</span>
+            <span>ถ่ายด้านชื่อยา — AI เติมชื่อให้อัตโนมัติ</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <input type="file" id="namePhotoInput" accept="image/*" capture="environment" style="display:none">
+        </div>
+        ` : ''}
         <input id="newDrugName" placeholder="ชื่อยา (จำเป็น)..." value="${r.name||''}"
           style="${inp}">
         <input id="newDrugGen" placeholder="Generic / ชื่อสามัญ (ถ้ามี)..." value="${r.gen||''}"
@@ -1407,6 +1422,16 @@ function bindScanTab() {
       photoInput.value = '';
     });
   }
+
+  const namePhotoBtn = document.getElementById('namePhotoBtn');
+  const namePhotoInput = document.getElementById('namePhotoInput');
+  if (namePhotoBtn && namePhotoInput) {
+    namePhotoBtn.addEventListener('click', () => namePhotoInput.click());
+    namePhotoInput.addEventListener('change', () => {
+      if (namePhotoInput.files && namePhotoInput.files[0]) handleNamePhoto(namePhotoInput.files[0]);
+      namePhotoInput.value = '';
+    });
+  }
 }
 
 function toggleVoice() {
@@ -1591,6 +1616,38 @@ async function handleOCRFile(file) {
   }
 }
 
+async function handleNamePhoto(file) {
+  if (!file) return;
+  const btn = document.getElementById('namePhotoBtn');
+  if (btn) { btn.disabled = true; btn.style.opacity = '.6'; }
+  showToast('🤖 AI กำลังอ่านชื่อยา...', '#7c6cff');
+  try {
+    const data = await analyzeWithGemini(file);
+    if (!data || !data.name) {
+      showToast('⚠ ยังไม่เจอชื่อยา — ลองถ่ายให้เห็นชื่อยาชัดขึ้น แสงพอ ไม่สะท้อน', '#ff9f43');
+      return;
+    }
+    if (S.scanResult) {
+      S.scanResult.name = data.name;
+      S.scanResult.gen = data.generic || S.scanResult.gen || '';
+      S.scanResult._missingName = false;
+    }
+    const nameEl = document.getElementById('newDrugName');
+    const genEl  = document.getElementById('newDrugGen');
+    if (nameEl) { nameEl.value = data.name; nameEl.classList.add('ai-filled'); }
+    if (genEl && data.generic) { genEl.value = data.generic; genEl.classList.add('ai-filled'); }
+    showToast(`✅ AI อ่านชื่อยา: ${data.name}`, '#2ee6a6');
+    const row = document.querySelector('.name-photo-row');
+    if (row) row.style.display = 'none';
+    if (!S.scanResult?.needsExpiry) _startAutoSave();
+  } catch(e) {
+    console.warn('Name photo error:', e);
+    showToast('⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+  }
+}
+
 async function handlePhotoScan(file) {
   if (!file) return;
   const hasGemini = !!(S.settings.geminiKey || localStorage.getItem('geminiKey'));
@@ -1635,8 +1692,9 @@ async function handlePhotoScan(file) {
       cold:      existing?.cold || false,
       _fromScan: true,
       _fromAI:   true,
-      isNew:     !existing && !data.name,
+      isNew:       !existing && !data.name,
       needsExpiry: !exp || !data.lot,
+      _missingName: !data.name && !!(data.lot || data.expiry),
     };
     S.scanResult = result;
     S.scanState = 'detected';

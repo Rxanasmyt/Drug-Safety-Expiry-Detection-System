@@ -1688,6 +1688,27 @@ body {
   color: var(--ink); cursor: pointer; font-weight: 600;
   font-size: 12px; font-family: 'Sarabun', sans-serif;
 }
+.photo-guide-tip {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 12px; margin-bottom: 10px; border-radius: 11px;
+  background: var(--glass); border: 1px solid var(--glassb);
+  font-size: 11px; color: var(--ink3); line-height: 1.45;
+}
+.photo-guide-tip svg { flex-shrink: 0; margin-top: 1px; }
+.name-photo-row {
+  padding: 10px 12px; border-radius: 12px; margin-bottom: 6px;
+  background: rgba(0,158,158,.07); border: 1px dashed rgba(0,158,158,.4);
+}
+.name-photo-hint {
+  font-size: 11px; color: var(--ink3); margin-bottom: 8px; line-height: 1.4;
+}
+.name-photo-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 10px 14px; border-radius: 10px; border: none;
+  background: rgba(0,158,158,.18); color: var(--brand);
+  cursor: pointer; font-size: 13px; font-weight: 700;
+  font-family: 'Sarabun', sans-serif;
+}
 
 /* ── SCAN TAB: 3-BUTTON ACTION ROW (legacy) ─────────── */
 .scan-actions-3 {
