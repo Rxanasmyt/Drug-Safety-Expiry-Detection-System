@@ -68,16 +68,36 @@ const DRUG_LABEL_PROMPT = [
   'ตอบ null ทุก field ที่ไม่มีข้อมูลในภาพ ห้ามเดา',
 ].join('\n');
 
+function compressForAI(file, maxPx = 1200, quality = 0.80) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', quality).split(',')[1]);
+    };
+    img.onerror = () => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result.split(',')[1]);
+      r.onerror = () => resolve(null);
+      r.readAsDataURL(file);
+    };
+    img.src = url;
+  });
+}
+
 async function analyzeWithGemini(file) {
   const key = S.settings.geminiKey || localStorage.getItem('geminiKey') || '';
   if (!key) return null;
-  const b64 = await new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result.split(',')[1]);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-  const mime = file.type || 'image/jpeg';
+  const b64 = await compressForAI(file);
+  if (!b64) return null;
+  const mime = 'image/jpeg';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${encodeURIComponent(key)}`,
     {
@@ -213,14 +233,14 @@ function speak(t) {
 
 // ── TOAST ─────────────────────────────────────────────
 let _toastTimer = null;
-function showToast(msg, color) {
+function showToast(msg, color, ms) {
   const el = document.getElementById('toast');
   el.style.borderColor = (color||'#2dd4bf') + '66';
   el.style.boxShadow = `0 0 28px -6px ${color||'#2dd4bf'}66`;
   el.innerHTML = `<span style="flex:1">${msg}</span>`;
   el.classList.remove('hidden');
   clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => el.classList.add('hidden'), 2800);
+  _toastTimer = setTimeout(() => el.classList.add('hidden'), ms || 2800);
 }
 
 // ── THEME ─────────────────────────────────────────────
@@ -1487,16 +1507,16 @@ function stopCamera() {
 
 // ── OCR AUTO-FILL ─────────────────────────────────────
 let _autoSaveTimer = null;
-function _startAutoSave() {
+function _startAutoSave(delay = 2) {
   clearTimeout(_autoSaveTimer);
   if (!S.scanResult) return;
-  let cnt = 3;
+  let cnt = delay;
   const btn = document.getElementById('acceptScanBtn');
   if (btn) btn.classList.add('ai-ready');
   function tick() {
     if (!S.scanResult) { if (btn) btn.classList.remove('ai-ready'); return; }
     if (cnt <= 0) { if (btn) btn.classList.remove('ai-ready'); acceptScan(); return; }
-    showToast(`✓ AI อ่านครบ — บันทึกอัตโนมัติใน ${cnt} วิ · แตะฟอร์มเพื่อยกเลิก`, '#2ee6a6');
+    showToast(`✅ AI อ่านครบ — บันทึกใน ${cnt} วิ · แตะเพื่อยกเลิก`, '#2ee6a6', 950);
     cnt--;
     _autoSaveTimer = setTimeout(tick, 1000);
   }
@@ -1648,6 +1668,8 @@ async function handleNamePhoto(file) {
   }
 }
 
+const HERO_BTN_DEFAULT_HTML = `<div class="hero-photo-icon-wrap"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><div class="hero-photo-text"><div class="hero-photo-title">ถ่ายภาพฉลากยา</div><div class="hero-photo-sub">AI อ่าน ชื่อยา · EXP · LOT · วันผลิต ครบในภาพเดียว</div></div><svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`;
+
 async function handlePhotoScan(file) {
   if (!file) return;
   const hasGemini = !!(S.settings.geminiKey || localStorage.getItem('geminiKey'));
@@ -1656,23 +1678,26 @@ async function handlePhotoScan(file) {
     return;
   }
   const btn = document.getElementById('photoScanBtn');
-  const origBtnHTML = btn ? btn.innerHTML : '';
+
+  // Show instant photo preview in the hero button — gives immediate visual feedback
+  const previewUrl = URL.createObjectURL(file);
   if (btn) {
-    btn.innerHTML = `<div class="hero-photo-icon-wrap" style="width:40px;height:40px"><span style="font-size:20px">⏳</span></div><div class="hero-photo-text"><div class="hero-photo-title">AI กำลังอ่านฉลาก...</div><div class="hero-photo-sub">กรุณารอสักครู่</div></div>`;
+    btn.innerHTML = `<div class="hero-photo-icon-wrap" style="padding:0;overflow:hidden;border-radius:10px;width:52px;height:52px"><img src="${previewUrl}" style="width:100%;height:100%;object-fit:cover"></div><div class="hero-photo-text"><div class="hero-photo-title" style="display:flex;align-items:center;gap:7px"><span class="ai-spinner"></span>AI กำลังอ่านฉลาก...</div><div class="hero-photo-sub">กำลังบีบอัดและส่งวิเคราะห์</div></div>`;
     btn.disabled = true;
     btn.style.animation = 'none';
-    btn.style.opacity = '.8';
+    btn.style.opacity = '.88';
   }
-  showToast('🤖 AI กำลังวิเคราะห์ฉลากยา...', '#7c6cff');
+
+  const t0 = Date.now();
   try {
     const data = await analyzeWithGemini(file);
+    URL.revokeObjectURL(previewUrl);
     if (!data || (!data.name && !data.expiry && !data.lot)) {
-      showToast('⚠ AI อ่านไม่พบข้อมูล — ถ่ายให้เห็นฉลากชัดขึ้น ไม่มีแสงสะท้อน', '#ff9f43');
+      showToast('⚠ AI อ่านไม่พบข้อมูล — ถ่ายด้านที่มีชื่อยาให้ชัด ไม่มีแสงสะท้อน', '#ff9f43');
       return;
     }
     const exp = data.expiry ? new Date(data.expiry) : null;
     const mfd = data.mfd ? new Date(data.mfd) : null;
-    // Look up by GTIN first, then by name match in inventory
     const byGtin = data.gtin ? S.items.find(i => i.gtin === data.gtin || i.barcode === data.gtin) : null;
     const byName = !byGtin && data.name ? S.items.find(i => i.name?.toLowerCase() === data.name?.toLowerCase()) : null;
     const existing = byGtin || byName;
@@ -1683,32 +1708,31 @@ async function handlePhotoScan(file) {
       gtin:      data.gtin || existing?.gtin || '',
       barcode:   data.gtin || existing?.gtin || '',
       lot:       data.lot || '',
-      exp,
-      mfd,
+      exp, mfd,
       qty:       1,
       dest:      S.scanDest,
       highAlert: existing?.highAlert || false,
       lasa:      existing?.lasa || false,
       cold:      existing?.cold || false,
-      _fromScan: true,
-      _fromAI:   true,
-      isNew:       !existing && !data.name,
-      needsExpiry: !exp || !data.lot,
+      _fromScan: true, _fromAI: true,
+      isNew:        !existing && !data.name,
+      needsExpiry:  !exp || !data.lot,
       _missingName: !data.name && !!(data.lot || data.expiry),
     };
     S.scanResult = result;
     S.scanState = 'detected';
     S.aiConf = 99;
     const _stResult = result.needsExpiry ? { ...result, exp: new Date(Date.now() + 365*86400000) } : result;
-    const _st = itemStatus(_stResult);
-    handoffWrite(result, _st);
+    handoffWrite(result, itemStatus(_stResult));
     bumpStreak(); detectStress();
     vibrate([8,40,12]);
+
     const gotFields = [data.name, data.lot, data.expiry, data.mfd].filter(Boolean);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     if (gotFields.length >= 3) {
-      showToast(`✅ AI อ่านได้ ${gotFields.length} รายการ — ตรวจสอบก่อนบันทึก`, '#2ee6a6');
-    } else if (gotFields.length > 0) {
-      showToast(`🤖 AI อ่านได้ ${gotFields.length} รายการ — กรอกส่วนที่เหลือ`, '#ff9f43');
+      showToast(`✅ AI อ่านได้ ${gotFields.length} ช่อง (${elapsed}s) — บันทึกอัตโนมัติ`, '#2ee6a6');
+    } else {
+      showToast(`🤖 AI อ่านได้ ${gotFields.length} ช่อง — กรอกส่วนที่เหลือ`, '#ff9f43');
     }
     updateTabBody();
     requestAnimationFrame(() => {
@@ -1721,18 +1745,16 @@ async function handlePhotoScan(file) {
         const first = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
         if (first) first.focus();
       }, 80);
-      // Auto-save if all required data is complete
-      if (!result.needsExpiry && result.name) {
-        setTimeout(() => _startAutoSave(), 600);
-      }
+      if (!result.needsExpiry && result.name) setTimeout(() => _startAutoSave(2), 400);
     });
   } catch(e) {
+    URL.revokeObjectURL(previewUrl);
     console.warn('Photo scan error:', e);
     const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
     showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
   } finally {
     if (btn) {
-      btn.innerHTML = origBtnHTML || `<div class="hero-photo-icon-wrap"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><div class="hero-photo-text"><div class="hero-photo-title">ถ่ายภาพฉลากยา</div><div class="hero-photo-sub">AI อ่าน ชื่อยา · EXP · LOT · วันผลิต ครบในภาพเดียว</div></div><svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`;
+      btn.innerHTML = HERO_BTN_DEFAULT_HTML;
       btn.disabled = false;
       btn.style.animation = '';
       btn.style.opacity = '';
@@ -2640,14 +2662,24 @@ function acceptScan() {
 
   vibrate([8,40,12]); sfx('success');
   speak(S.scanResult.name);
+  const savedName = S.scanResult.name;
+  const savedDest = S.scanResult.dest;
+  const wasFromAI = !!S.scanResult._fromAI;
   S.scanHistory.unshift({ ...S.scanResult, ts: new Date() });
   if (S.scanHistory.length > 20) S.scanHistory.pop();
   addToItems(S.scanResult);
-  addLog('รับเข้าสต๊อก', S.scanResult.name + ' Lot ' + S.scanResult.lot + ' → ' + S.scanResult.dest);
-  showToast(`✓ รับ ${S.scanResult.name} เข้า${S.scanResult.dest==='SUBSTOCK'?'คลัง':'หน้าเคาน์เตอร์'}`, '#2ee6a6');
+  addLog('รับเข้าสต๊อก', savedName + ' Lot ' + S.scanResult.lot + ' → ' + savedDest);
+  showToast(`✓ รับ ${savedName} · ${S.rapidMode ? 'พร้อมถ่ายยาชิ้นถัดไป 📷' : 'เข้า' + (savedDest==='SUBSTOCK'?'คลัง':'เคาน์เตอร์')}`, '#2ee6a6', 2200);
   S.scanResult = null; S.scanState = 'idle';
   updateTabBody();
   saveToFirestore(S.scanHistory[0]);
+  // Rapid mode: auto-trigger camera for next drug
+  if (S.rapidMode && wasFromAI) {
+    setTimeout(() => {
+      const photoInput = document.getElementById('photoScanInput');
+      if (photoInput) photoInput.click();
+    }, 600);
+  }
 }
 
 function addToItems(r) {
