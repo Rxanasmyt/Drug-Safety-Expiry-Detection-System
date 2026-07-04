@@ -130,8 +130,49 @@ function _mergeDrugCache(data) {
 
 function _saveDrugCache(data) {
   if (!data?.gtin || !data?.name) return;
-  S.drugCache[data.gtin] = { name: data.name, generic: data.generic, strength: data.strength, form: data.form };
+  const entry = {
+    name: data.name || '',
+    generic: data.generic || '',
+    strength: data.strength || '',
+    form: data.form || '',
+  };
+  S.drugCache[data.gtin] = entry;
+  // 1. Update localStorage immediately (instant read on same device)
   try { localStorage.setItem('_drugCache', JSON.stringify(S.drugCache)); } catch(_) {}
+  // 2. Persist to Firestore so ALL devices/users share the cache (fire-and-forget)
+  if (typeof drugCacheRef !== 'undefined') {
+    drugCacheRef.doc(data.gtin).set({
+      ...entry,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: S.user?.name || 'system',
+    }).catch(e => console.warn('Drug cache Firestore write:', e));
+  }
+}
+
+// Real-time sync: Firestore drugCache → S.drugCache + localStorage
+// Called once on app init. Keeps all devices in sync automatically.
+function initDrugCache() {
+  if (typeof drugCacheRef === 'undefined') return;
+  drugCacheRef.onSnapshot(snapshot => {
+    let changed = false;
+    snapshot.docChanges().forEach(change => {
+      const gtin = change.doc.id;
+      if (change.type === 'added' || change.type === 'modified') {
+        const d = change.doc.data();
+        S.drugCache[gtin] = { name: d.name || '', generic: d.generic || '', strength: d.strength || '', form: d.form || '' };
+        changed = true;
+      } else if (change.type === 'removed') {
+        delete S.drugCache[gtin];
+        changed = true;
+      }
+    });
+    if (changed) {
+      try { localStorage.setItem('_drugCache', JSON.stringify(S.drugCache)); } catch(_) {}
+    }
+  }, err => {
+    // Silently fall back to localStorage — S.drugCache already loaded from it at startup
+    console.warn('Drug cache sync:', err.code || err.message);
+  });
 }
 
 async function analyzeWithGemini(src) {
@@ -3851,6 +3892,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Try Firestore
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
+  try { initDrugCache(); } catch(e) { console.warn('Drug cache init:', e); }
 
   // If session was restored, start Firestore listener now
   if (S.screen === 'app' && S.user) {

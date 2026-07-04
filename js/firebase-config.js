@@ -12,8 +12,9 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 
-const db       = firebase.firestore();
-const drugsRef = db.collection('drugs');
+const db           = firebase.firestore();
+const drugsRef     = db.collection('drugs');
+const drugCacheRef = db.collection('drugCache'); // GTIN → drug metadata, shared across all devices/users
 
 db.enablePersistence({ synchronizeTabs: true }).catch(err => {
   if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {
