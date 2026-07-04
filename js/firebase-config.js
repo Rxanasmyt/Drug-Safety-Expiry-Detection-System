@@ -14,7 +14,10 @@ firebase.initializeApp(firebaseConfig);
 
 const db           = firebase.firestore();
 const drugsRef     = db.collection('drugs');
-const drugCacheRef = db.collection('drugCache'); // GTIN → drug metadata, shared across all devices/users
+const drugCacheRef = db.collection('drugCache');   // GTIN → drug metadata, shared across all devices/users
+const recallsRef   = db.collection('recalls');     // Lot recall alerts issued by pharmacy admin
+const disposalsRef = db.collection('disposals');   // Drug disposal records (2-person confirmation)
+const dispensingRef = db.collection('dispensing'); // Patient dispensing records
 
 db.enablePersistence({ synchronizeTabs: true }).catch(err => {
   if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {

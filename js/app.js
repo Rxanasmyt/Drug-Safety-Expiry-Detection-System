@@ -33,9 +33,14 @@ const S = {
   scanHistory: [],
   sheet: null, sheetData: null,
   confirmAction: null,
-  focusManual: null,   // null=auto (time-based), true=force-on, false=force-off
+  focusManual: null,
   cmdPaletteOpen: false,
-  voiceFeedback: true, // hands-free TTS on every scan
+  voiceFeedback: true,
+  recalls: [],          // Active lot recalls from Firestore
+  lastScanNames: [],    // Track last 2 scanned drug names for LASA detection
+  batchSession: null,   // { startTime, items[] } for rapid scan session summary
+  dept: localStorage.getItem('dept') || 'OPD',
+  stockDept: 'all',
 };
 
 // ── SEED DATA ─────────────────────────────────────────
@@ -1083,6 +1088,52 @@ function renderStatusRing(counts, total) {
 }
 
 // ── DASH TAB ──────────────────────────────────────────
+function renderExpiryChart(items) {
+  const now = new Date();
+  const months = [];
+  for (let i = 0; i < 6; i++) {
+    const mStart = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const mEnd   = new Date(now.getFullYear(), now.getMonth() + i + 1, 0, 23, 59, 59);
+    const label  = mStart.toLocaleDateString('th-TH', { month: 'short' });
+    const inRange = items.filter(it => {
+      if (!it.exp) return false;
+      const d = it.exp instanceof Date ? it.exp : new Date(it.exp);
+      return d >= mStart && d <= mEnd;
+    });
+    const cRed    = inRange.filter(it => itemStatus(it).key === 'RED').length;
+    const cOrange = inRange.filter(it => itemStatus(it).key === 'ORANGE').length;
+    const cOther  = inRange.filter(it => !['RED','ORANGE'].includes(itemStatus(it).key)).length;
+    months.push({ label, cRed, cOrange, cOther, total: inRange.length });
+  }
+  const maxVal = Math.max(...months.map(m => m.total), 1);
+  const bW = 40; const gap = 11; const chartH = 78;
+  const vW = (bW + gap) * 6 - gap;
+  const bars = months.map((m, i) => {
+    const x = i * (bW + gap);
+    const hRed    = (m.cRed    / maxVal) * chartH;
+    const hOrange = (m.cOrange / maxVal) * chartH;
+    const hOther  = (m.cOther  / maxVal) * chartH;
+    let y = chartH; const parts = [];
+    if (hOther  > 0) { y -= hOther;  parts.push(`<rect x="${x}" y="${y.toFixed(1)}" width="${bW}" height="${hOther.toFixed(1)}" rx="3" fill="#2ee6a650"/>`); }
+    if (hOrange > 0) { y -= hOrange; parts.push(`<rect x="${x}" y="${y.toFixed(1)}" width="${bW}" height="${hOrange.toFixed(1)}" rx="3" fill="#ff9f43"/>`); }
+    if (hRed    > 0) { y -= hRed;    parts.push(`<rect x="${x}" y="${y.toFixed(1)}" width="${bW}" height="${hRed.toFixed(1)}" rx="3" fill="#ff4d5e"/>`); }
+    if (m.total === 0) parts.push(`<rect x="${x}" y="${chartH - 3}" width="${bW}" height="3" rx="2" fill="rgba(255,255,255,.06)"/>`);
+    return `<g>${parts.join('')}
+      <text x="${x + bW/2}" y="${chartH + 13}" text-anchor="middle" fill="var(--ink3)" font-size="9.5">${m.label}</text>
+      ${m.total > 0 ? `<text x="${x + bW/2}" y="${Math.max(y - 4, 9)}" text-anchor="middle" fill="var(--ink2)" font-size="9" font-weight="700">${m.total}</text>` : ''}
+    </g>`;
+  }).join('');
+  return `
+    <div class="dash-chart-wrap">
+      <svg width="100%" viewBox="0 0 ${vW} ${chartH + 18}" preserveAspectRatio="xMidYMid meet" style="display:block">${bars}</svg>
+      <div class="dash-chart-legend">
+        <span><span class="dash-legend-dot" style="background:#ff4d5e"></span>หมดอายุ</span>
+        <span><span class="dash-legend-dot" style="background:#ff9f43"></span>ใกล้หมด</span>
+        <span><span class="dash-legend-dot" style="background:#2ee6a650"></span>ปลอดภัย</span>
+      </div>
+    </div>`;
+}
+
 function renderDashTab() {
   const all = S.items;
   const counts = { RED:0, ORANGE:0, YELLOW:0, GREEN:0 };
@@ -1090,49 +1141,92 @@ function renderDashTab() {
   const alerts = all.filter(it => ['RED','ORANGE'].includes(itemStatus(it).key))
     .sort((a,b) => daysLeft(a.exp) - daysLeft(b.exp));
 
+  const atRiskCost = alerts.reduce((s, it) => s + (it.qty || 1) * 50, 0);
+  const todayScans = S.scanHistory.filter(h => {
+    const d = new Date(h.ts); const n = new Date();
+    return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
+  }).length;
+  const lowStock = S.items.filter(it => it.minStock > 0 && it.qty <= it.minStock);
+
   const kpiData = [
-    { icon:'💊', bg:'rgba(0,158,158,.15)', val:all.length, label:'ยาทั้งหมด', trend:'', trendC:'#2ee6a6' },
-    { icon:'🔴', bg:'rgba(255,77,94,.15)', val:counts.RED, label:'ห้ามใช้/หมดอายุ', trend: counts.RED > 0 ? '!' : '✓', trendC: counts.RED > 0 ? '#ff4d5e' : '#2ee6a6' },
-    { icon:'🟠', bg:'rgba(255,159,67,.15)', val:counts.ORANGE, label:'คืนบริษัท', trend:'', trendC:'#ff9f43' },
-    { icon:'🟢', bg:'rgba(46,230,166,.15)', val:counts.GREEN, label:'ปลอดภัย', trend:'', trendC:'#2ee6a6' },
+    { icon:'💊', bg:'rgba(0,158,158,.15)', val:all.length, label:'ยาทั้งหมด', sub:`${S.dept} · รายการทั้งหมด`, trendC:'#009E9E' },
+    { icon:'🔴', bg:'rgba(255,77,94,.15)', val:counts.RED, label:'ห้ามใช้/หมดอายุ', sub: counts.RED>0 ? 'ต้องดำเนินการทันที':'ไม่มีรายการ', trendC: counts.RED>0?'#ff4d5e':'#2ee6a6' },
+    { icon:'🟠', bg:'rgba(255,159,67,.15)', val:counts.ORANGE, label:'คืนบริษัท', sub:`มูลค่าเสี่ยง ~${atRiskCost.toLocaleString('th-TH')}฿`, trendC:'#ff9f43' },
+    { icon:'📊', bg:'rgba(157,140,255,.15)', val:todayScans, label:'สแกนวันนี้', sub:`สต๊อกต่ำ: ${lowStock.length} รายการ`, trendC:'#9d8cff' },
   ];
 
   const kpiHTML = kpiData.map((k,i) => `
     <div class="kpi-card" style="animation-delay:${i*0.06}s">
       <div class="kpi-card-head">
         <div class="kpi-card-icon" style="background:${k.bg}">${k.icon}</div>
-        ${k.trend ? `<div class="kpi-trend" style="background:${k.trendC}22;color:${k.trendC}">${k.trend}</div>` : ''}
       </div>
       <div class="kpi-card-val" style="color:${k.trendC||'var(--ink)'}">${k.val}</div>
       <div class="kpi-card-label">${k.label}</div>
+      <div style="font-size:10px;color:var(--ink3);margin-top:1px;line-height:1.3">${k.sub}</div>
     </div>`).join('');
 
-  const alertListHTML = alerts.length ? alerts.slice(0,6).map(it => {
+  const activeRecalls = (S.recalls || []).filter(r => r.active !== false);
+  const recallBanner = activeRecalls.length ? `
+    <div class="recall-banner">
+      <div class="recall-banner-title">🚨 ยาถูกเรียกคืน ${activeRecalls.length} รายการ</div>
+      ${activeRecalls.slice(0,3).map(r => `<div class="recall-banner-item">• ${r.drugName||'—'} · Lot ${r.lotNo||'—'} · ${r.reason||'—'}</div>`).join('')}
+    </div>` : '';
+
+  const lowStockHTML = lowStock.length ? `
+    <div class="dash-section-title" style="margin-top:16px">
+      <span>📉 สต๊อกต่ำกว่ากำหนด</span>
+      <span class="dash-section-sub">${lowStock.length} รายการ</span>
+    </div>
+    ${lowStock.map(it => `<div class="alert-item">
+      <div class="alert-shape" style="font-size:18px">📦</div>
+      <div class="alert-info"><div class="alert-name">${it.name}</div><div class="alert-detail">เหลือ ${it.qty} / ขั้นต่ำ ${it.minStock} หน่วย</div></div>
+      <div class="alert-badge"><div class="alert-days" style="background:rgba(157,140,255,.15);color:#9d8cff">ต่ำ</div></div>
+    </div>`).join('')}` : '';
+
+  const alertListHTML = alerts.length ? alerts.slice(0,8).map(it => {
     const st = itemStatus(it);
     const dl = daysLeft(it.exp);
     return `<div class="alert-item">
       <div class="alert-shape">${shapeIconSVG(st.shape, st.c, 16)}</div>
       <div class="alert-info">
         <div class="alert-name">${it.name}</div>
-        <div class="alert-detail">Lot ${it.lot} · ${it.loc}</div>
+        <div class="alert-detail">Lot ${it.lot} · ${it.loc === 'FRONT_SHELF' ? 'เคาน์เตอร์' : 'คลัง'}</div>
       </div>
       <div class="alert-badge">
         <div class="alert-days" style="background:${st.c}22;color:${st.c}">${dl<0?`หมดอายุ ${-dl}ว`:`${dl}ว`}</div>
       </div>
     </div>`;
-  }).join('') : `<div class="empty-state" style="margin-top:8px"><div class="empty-state-icon">✅</div>ยาทุกรายการปลอดภัย</div>`;
+  }).join('') : '';
 
-  const total = all.length;
+  const isAdmin = S.user?.role === 'Admin';
 
   return `
     <div class="kpi-grid">${kpiHTML}</div>
-    <div class="dash-section-title">
+
+    ${recallBanner}
+
+    <div class="dash-section-title" style="margin-top:4px">
+      <span>📅 ยาหมดอายุรายเดือน (6 เดือนข้างหน้า)</span>
+    </div>
+    ${renderExpiryChart(all)}
+
+    ${alerts.length ? `
+    <div class="dash-section-title" style="margin-top:16px">
       <span>⚠ รายการต้องระวัง</span>
       <span class="dash-section-sub">${alerts.length} รายการ</span>
     </div>
-    ${alertListHTML}
+    ${alertListHTML}` : `<div class="empty-state" style="margin-top:12px"><div class="empty-state-icon">✅</div>ยาทุกรายการปลอดภัย</div>`}
+
+    ${lowStockHTML}
+
     <div class="dash-section-title" style="margin-top:20px"><span>📊 สัดส่วนสถานะยา</span></div>
-    ${renderStatusRing(counts, total)}
+    ${renderStatusRing(counts, all.length)}
+
+    <div class="dash-action-row">
+      <button class="dash-action-btn" id="exportCSVBtn">📥 Export CSV</button>
+      ${isAdmin ? `<button class="dash-action-btn dash-action-btn-red" id="addRecallBtn">🚨 เพิ่ม Recall</button>` : ''}
+    </div>
+
     <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:14px;font-family:'JetBrains Mono',monospace">
       อัปเดต ${currentTime()} · ${new Date().toLocaleDateString('th-TH-u-ca-gregory', { day:'2-digit', month:'short', year:'numeric' })}
     </div>`;
@@ -1244,11 +1338,32 @@ function renderCfgTab() {
       <div class="settings-section-label"><span>📋</span>Audit Log (${S.auditLog.length} รายการ)</div>
       ${auditHTML}
 
+      <div class="settings-section-label"><span>🔔</span>การแจ้งเตือน & แผนก</div>
+      <div class="settings-row">
+        <div class="settings-row-left">
+          <div class="settings-row-label">การแจ้งเตือนระบบ</div>
+          <div class="settings-row-sub">แจ้งเตือนยาหมดอายุแม้ปิดแอป</div>
+        </div>
+        <button class="cfg-action-btn" id="notifPermBtn"
+          style="background:${'Notification' in window && Notification.permission==='granted' ? 'rgba(46,230,166,.15)' : 'rgba(157,140,255,.15)'};color:${'Notification' in window && Notification.permission==='granted' ? '#2ee6a6' : '#9d8cff'}">
+          ${'Notification' in window && Notification.permission==='granted' ? '✅ เปิดอยู่' : '🔔 เปิดใช้งาน'}
+        </button>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row-left">
+          <div class="settings-row-label">แผนก (Department)</div>
+          <div class="settings-row-sub">สำหรับกรองและบันทึกข้อมูล</div>
+        </div>
+        <select class="form-select" id="deptSelect" style="width:auto;padding:8px 12px;font-size:12px">
+          ${['OPD','IPD','Emergency','OR','Pharmacy'].map(d => `<option value="${d}"${S.dept===d?' selected':''}>${d}</option>`).join('')}
+        </select>
+      </div>
+
       <div class="settings-section-label"><span>ℹ</span>เกี่ยวกับระบบ</div>
       <div class="settings-row">
         <div class="settings-row-left">
           <div class="settings-row-label">Drug Safety System</div>
-          <div class="settings-row-sub">รพ.กรงปินัง · จ.ยะลา · v2.0</div>
+          <div class="settings-row-sub">รพ.กรงปินัง · จ.ยะลา · v2.1</div>
         </div>
         <div style="display:flex;gap:5px">
           <span class="ha-badge">HA</span>
@@ -1458,8 +1573,14 @@ function bindApp() {
 function bindTabEvents() {
   if (S.tab === 'scan') bindScanTab();
   else if (S.tab === 'stock') bindStockTab();
+  else if (S.tab === 'dash') bindDashTab();
   else if (S.tab === 'cfg') bindCfgTab();
   initLongPress();
+}
+
+function bindDashTab() {
+  document.getElementById('exportCSVBtn')?.addEventListener('click', () => exportCSV());
+  document.getElementById('addRecallBtn')?.addEventListener('click', () => showAddRecallModal());
 }
 
 function bindScanTab() {
@@ -1493,7 +1614,13 @@ function bindScanTab() {
   });
   const rapidToggle = document.getElementById('rapidToggle');
   if (rapidToggle) rapidToggle.addEventListener('click', () => {
-    vibrate(8); S.rapidMode = !S.rapidMode; S.scanCount = 0;
+    vibrate(8);
+    if (S.rapidMode && S.batchSession && S.batchSession.items.length > 0) {
+      // Ending rapid mode — show batch summary
+      setTimeout(() => showBatchSummary(), 300);
+    }
+    S.rapidMode = !S.rapidMode; S.scanCount = 0;
+    if (!S.rapidMode) S.batchSession = null;
     updateTabBody();
   });
   const resetRapid = document.getElementById('resetRapidBtn');
@@ -2326,6 +2453,13 @@ function bindCfgTab() {
       updateTabBody();
     });
   }
+  document.getElementById('notifPermBtn')?.addEventListener('click', () => requestNotifPermission());
+  const deptSel = document.getElementById('deptSelect');
+  if (deptSel) deptSel.addEventListener('change', () => {
+    S.dept = deptSel.value;
+    try { localStorage.setItem('dept', S.dept); } catch(e) {}
+    showToast(`✓ เปลี่ยนแผนกเป็น ${S.dept}`, '#009E9E');
+  });
 }
 
 function bindSheetEvents() {
@@ -2957,11 +3091,32 @@ function acceptScan() {
   speak(S.scanResult.name);
   const savedName = S.scanResult.name;
   const savedDest = S.scanResult.dest;
+  const savedLot  = S.scanResult.lot;
   const wasFromAI = !!S.scanResult._fromAI;
-  S.scanHistory.unshift({ ...S.scanResult, ts: new Date() });
-  if (S.scanHistory.length > 20) S.scanHistory.pop();
+
+  // LASA consecutive scan detection
+  if (savedName) {
+    checkLASA(savedName);
+    S.lastScanNames.unshift(savedName);
+    if (S.lastScanNames.length > 2) S.lastScanNames.pop();
+  }
+
+  // Recall check on accepted scan
+  const activeRecall = checkRecall(S.scanResult);
+  if (activeRecall) showRecallAlert(activeRecall, S.scanResult);
+
+  const scannedItem = { ...S.scanResult, ts: new Date(), dept: S.dept };
+  S.scanHistory.unshift(scannedItem);
+  if (S.scanHistory.length > 50) S.scanHistory.pop();
+
+  // Batch session tracking
+  if (S.rapidMode) {
+    if (!S.batchSession) S.batchSession = { startTime: Date.now(), items: [] };
+    S.batchSession.items.push(scannedItem);
+  }
+
   addToItems(S.scanResult);
-  addLog('รับเข้าสต๊อก', savedName + ' Lot ' + S.scanResult.lot + ' → ' + savedDest);
+  addLog('รับเข้าสต๊อก', savedName + ' Lot ' + savedLot + ' → ' + savedDest);
   showToast(`✓ รับ ${savedName} · ${S.rapidMode ? 'พร้อมถ่ายยาชิ้นถัดไป 📷' : 'เข้า' + (savedDest==='SUBSTOCK'?'คลัง':'เคาน์เตอร์')}`, '#2ee6a6', 2200);
   S.scanResult = null; S.scanState = 'idle';
   updateTabBody();
@@ -3053,13 +3208,23 @@ function showDrugSheet(it) {
         <div class="detail-field">
           <div class="detail-item"><div class="detail-item-label">LOT NO.</div><div class="detail-item-val" style="font-family:'JetBrains Mono',monospace;color:#9d8cff">${it.lot}</div></div>
           ${it.mfd ? `<div class="detail-item"><div class="detail-item-label">วันผลิต</div><div class="detail-item-val" style="font-family:'JetBrains Mono',monospace">${fmtDate(it.mfd)}</div></div>` : ''}
-          <div class="detail-item"><div class="detail-item-label">จำนวน</div><div class="detail-item-val">${it.qty} หน่วย</div></div>
+          <div class="detail-item"><div class="detail-item-label">จำนวน</div><div class="detail-item-val">${it.qty} หน่วย${it.minStock > 0 ? ` <span style="color:${it.qty<=it.minStock?'#ff4d5e':'#2ee6a6'};font-size:10px">(ขั้นต่ำ ${it.minStock})</span>` : ''}</div></div>
           <div class="detail-item"><div class="detail-item-label">ตำแหน่ง</div><div class="detail-item-val">${it.loc==='FRONT_SHELF'?'🛎 หน้าเคาน์เตอร์':'📦 คลัง'}</div></div>
           <div class="detail-item"><div class="detail-item-label">อายุสต๊อก</div><div class="detail-item-val">${it.age} วัน</div></div>
+          ${it.gtin ? `<div class="detail-item"><div class="detail-item-label">GTIN</div><div class="detail-item-val" style="font-family:'JetBrains Mono',monospace;font-size:11px">${it.gtin}</div></div>` : ''}
+          ${it.gen ? `<div class="detail-item"><div class="detail-item-label">Generic</div><div class="detail-item-val">${it.gen}</div></div>` : ''}
+          ${(() => { const cache = it.gtin ? S.drugCache[it.gtin] : null; return cache?.strength ? `<div class="detail-item"><div class="detail-item-label">Strength</div><div class="detail-item-val">${cache.strength}</div></div>` : ''; })()}
+          ${(() => { const cache = it.gtin ? S.drugCache[it.gtin] : null; return cache?.form ? `<div class="detail-item"><div class="detail-item-label">รูปแบบ</div><div class="detail-item-val">${cache.form}</div></div>` : ''; })()}
         </div>
-        <div style="display:flex;gap:8px;margin-top:16px">
-          ${it.loc==='SUBSTOCK' ? `<button class="form-submit" style="flex:1;padding:13px;font-size:13px" id="transferOneBtn">🚀 โอนขึ้นเคาน์เตอร์</button>` : ''}
-          <button class="form-submit" style="flex:1;padding:13px;font-size:13px;background:rgba(255,77,94,.15);color:#ff4d5e;border:1px solid rgba(255,77,94,.3)" id="deleteItemBtn">🗑 ลบ</button>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          ${it.loc==='SUBSTOCK' ? `<button class="sheet-action-btn sheet-action-transfer" id="transferOneBtn">🚀 โอนขึ้นเคาน์เตอร์</button>` : ''}
+          <button class="sheet-action-btn sheet-action-dispense" id="dispenseItemBtn">💊 จ่ายยา</button>
+          ${st.key === 'ORANGE' ? `<button class="sheet-action-btn sheet-action-return" id="returnItemBtn">↩ คืนบริษัท</button>` : ''}
+          ${(st.key === 'RED' || S.user?.role === 'Admin') ? `<button class="sheet-action-btn sheet-action-disposal" id="disposalItemBtn">🗑 ทำลายยา</button>` : ''}
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="sheet-action-btn" style="flex:1;background:rgba(0,158,158,.12);color:#009E9E;border-color:rgba(0,158,158,.25)" id="fdaLookupBtn">🔍 ค้นหาใน อย.</button>
+          <button class="sheet-action-btn" style="flex:1;background:rgba(255,77,94,.12);color:#ff4d5e;border-color:rgba(255,77,94,.25)" id="deleteItemBtn">🗑 ลบออก</button>
         </div>
         <button class="form-submit" style="background:var(--glass);color:var(--ink);border:1px solid var(--glassb);margin-top:8px" id="closeSheetBtn">ปิด</button>
       </div>
@@ -3078,9 +3243,16 @@ function showDrugSheet(it) {
     showToast(`✓ โอน ${it.name} ขึ้นหน้าเคาน์เตอร์`, '#2ee6a6');
     closeSheetFn();
   });
+  document.getElementById('dispenseItemBtn')?.addEventListener('click', () => showDispenseModal(it));
+  document.getElementById('returnItemBtn')?.addEventListener('click', () => showReturnWorkflowModal(it));
+  document.getElementById('disposalItemBtn')?.addEventListener('click', () => showDisposalModal(it));
+  document.getElementById('fdaLookupBtn')?.addEventListener('click', () => lookupThaiFDA(it.name, it.gtin));
   const deleteItem = document.getElementById('deleteItemBtn');
   if (deleteItem) deleteItem.addEventListener('click', () => {
     S.items = S.items.filter(x => x.id !== it.id);
+    if (typeof drugsRef !== 'undefined' && it.id && it._fromFirestore) {
+      drugsRef.doc(it.id).delete().catch(() => {});
+    }
     addLog('ลบยา', it.name + ' Lot ' + it.lot);
     sfx('success');
     showToast(`✓ ลบ ${it.name} แล้ว`, '#ff9f43');
@@ -3118,12 +3290,14 @@ function initFirestore() {
           qty: d.stock || d.qty || 0,
           loc: d.loc || (d.isEmergency ? 'FRONT_SHELF' : 'SUBSTOCK'),
           highAlert: !!d.isEmergency,
-          lasa: false,
+          lasa: !!d.lasa,
           cold: (d.storage||'').includes('2–8'),
           age: 0,
           form: (d.unit||'').includes('vial') ? 'vial' : (d.unit||'').includes('capsule') ? 'cap' : 'tab',
           gtin: d.gtin || '',
           mfd: d.mfd ? new Date(d.mfd) : null,
+          minStock: d.minStock || 0,
+          dept: d.dept || 'OPD',
           _fromFirestore: true,
         };
       });
@@ -3142,17 +3316,31 @@ function checkAndNotify() {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const red = S.items.filter(it => itemStatus(it).key === 'RED');
   const orange = S.items.filter(it => itemStatus(it).key === 'ORANGE');
-  if (red.length === 0 && orange.length === 0) return;
-  const key = `${red.length}-${orange.length}`;
+  const lowStock = S.items.filter(it => it.minStock > 0 && it.qty <= it.minStock);
+  const recalls = (S.recalls || []).filter(r => r.active !== false);
+  const key = `${red.length}-${orange.length}-${lowStock.length}-${recalls.length}`;
   if (key === _lastNotifKey) return;
   _lastNotifKey = key;
-  const title = red.length > 0 ? `⛔ ยาหมดอายุ ${red.length} รายการ` : `⚠ ยาใกล้หมดอายุ ${orange.length} รายการ`;
-  const body = red.length > 0
-    ? red.slice(0,3).map(it => `• ${it.name} (${daysLeft(it.exp) < 0 ? 'หมดอายุแล้ว' : `เหลือ ${daysLeft(it.exp)} วัน`})`).join('\n')
-    : orange.slice(0,3).map(it => `• ${it.name} · ${daysLeft(it.exp)} วัน`).join('\n');
-  try {
-    new Notification(title, { body, icon: '/icons/icon.svg', tag: 'pharmacare-alert', requireInteraction: red.length > 0 });
-  } catch(e) {}
+  // Priority: recalls > expired > near-expiry > low stock
+  if (recalls.length > 0) {
+    try { new Notification(`🚨 ยาถูกเรียกคืน ${recalls.length} รายการ`, {
+      body: recalls.slice(0,2).map(r => `• ${r.drugName} Lot ${r.lotNo}`).join('\n'),
+      icon: '/icons/icon.svg', tag: 'pharmacare-recall', requireInteraction: true }); } catch(e) {}
+  }
+  if (red.length > 0) {
+    try { new Notification(`⛔ ยาหมดอายุ ${red.length} รายการ`, {
+      body: red.slice(0,3).map(it => `• ${it.name} (${daysLeft(it.exp)<0?`หมดอายุแล้ว`:`เหลือ ${daysLeft(it.exp)} วัน`})`).join('\n'),
+      icon: '/icons/icon.svg', tag: 'pharmacare-alert', requireInteraction: true }); } catch(e) {}
+  } else if (orange.length > 0) {
+    try { new Notification(`⚠ ยาใกล้หมดอายุ ${orange.length} รายการ`, {
+      body: orange.slice(0,3).map(it => `• ${it.name} · ${daysLeft(it.exp)} วัน`).join('\n'),
+      icon: '/icons/icon.svg', tag: 'pharmacare-alert' }); } catch(e) {}
+  }
+  if (lowStock.length > 0) {
+    try { new Notification(`📦 สต๊อกต่ำ ${lowStock.length} รายการ`, {
+      body: lowStock.slice(0,3).map(it => `• ${it.name} เหลือ ${it.qty}/${it.minStock}`).join('\n'),
+      icon: '/icons/icon.svg', tag: 'pharmacare-stock' }); } catch(e) {}
+  }
 }
 
 async function saveToFirestore(item) {
@@ -3162,10 +3350,11 @@ async function saveToFirestore(item) {
       name: item.name, generic: item.gen||'', batch: item.lot||'',
       expiry: item.exp instanceof Date ? item.exp.toISOString().slice(0,10) : item.exp,
       stock: item.qty||0, unit: 'units', loc: item.loc||'SUBSTOCK',
-      isEmergency: !!item.highAlert, minStock: 0, cat: 'Other',
+      isEmergency: !!item.highAlert, minStock: item.minStock||0, cat: 'Other',
       storage: item.cold ? 'Refrigerated (2–8°C)' : 'Room Temperature (15–25°C)',
-      gtin: item.gtin || '',
+      gtin: item.gtin || '', lasa: !!item.lasa,
       mfd: item.mfd instanceof Date ? item.mfd.toISOString().slice(0,10) : (item.mfd || ''),
+      dept: item.dept || S.dept || 'OPD',
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     await drugsRef.add(data);
@@ -3848,6 +4037,454 @@ function renderDesktopPanel() {
   panel.innerHTML = html;
 }
 
+// ── FEATURE: PUSH NOTIFICATION PERMISSION ────────────
+function requestNotifPermission() {
+  if (!('Notification' in window)) {
+    showToast('🔕 บราวเซอร์นี้ไม่รองรับการแจ้งเตือน', '#ff9f43'); return;
+  }
+  if (Notification.permission === 'granted') {
+    new Notification('PharmaCare ✅', { body: 'การแจ้งเตือนเปิดอยู่แล้ว', icon: '/icons/icon.svg' });
+    showToast('✅ การแจ้งเตือนเปิดอยู่แล้ว', '#2ee6a6'); return;
+  }
+  Notification.requestPermission().then(p => {
+    if (p === 'granted') {
+      showToast('✅ เปิดรับการแจ้งเตือนแล้ว', '#2ee6a6');
+      new Notification('PharmaCare', { body: 'ระบบแจ้งเตือนยาพร้อมแล้ว 🔔', icon: '/icons/icon.svg' });
+      updateTabBody();
+    } else {
+      showToast('❌ กรุณาอนุญาตในการตั้งค่าบราวเซอร์', '#ff4d5e');
+    }
+  });
+}
+
+// ── FEATURE: LOT RECALL TRACKING ─────────────────────
+function initRecalls() {
+  if (typeof recallsRef === 'undefined') return;
+  recallsRef.where('active', '==', true).onSnapshot(snap => {
+    S.recalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (S.screen === 'app' && S.tab === 'dash') renderAppBody();
+    checkAndNotify();
+  }, err => console.warn('Recalls sync:', err.code || err.message));
+}
+
+function checkRecall(result) {
+  if (!result || !S.recalls?.length) return null;
+  return S.recalls.find(r =>
+    (r.lotNo && result.lot && r.lotNo === result.lot) ||
+    (r.gtin  && result.gtin && r.gtin === result.gtin)
+  ) || null;
+}
+
+function showRecallAlert(recall, item) {
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('recallOverlay')?.remove();
+  const html = `
+    <div class="overlay" id="recallOverlay">
+      <div id="confirm-box" style="border:2px solid #ff4d5e">
+        <div style="font-size:44px;text-align:center">🚨</div>
+        <div style="font-size:17px;font-weight:700;text-align:center;color:#ff4d5e;margin-top:8px">ยาถูกเรียกคืน!</div>
+        <div style="font-size:13px;color:var(--ink2);margin-top:10px;line-height:1.7;background:rgba(255,77,94,.08);border-radius:12px;padding:12px">
+          <b>ยา:</b> ${recall.drugName || item?.name || '—'}<br>
+          <b>Lot:</b> ${recall.lotNo || item?.lot || '—'}<br>
+          <b>เหตุผล:</b> ${recall.reason || '—'}<br>
+          <b>ออกโดย:</b> ${recall.issuedBy || '—'}
+        </div>
+        <div style="font-size:12px;color:#ff9f43;margin-top:8px">⚠ แยกยาออกจากชั้นทันที ห้ามจ่ายให้ผู้ป่วย</div>
+        <div style="display:flex;gap:10px;margin-top:16px">
+          <button id="recallCloseBtn" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">รับทราบ</button>
+          <button id="recallDisposalBtn" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#fff;background:linear-gradient(135deg,#ff4d5e,#c81e2e)">🗑 ทำลายยา</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  sfx('error'); vibrate([50,100,50,100,50]);
+  speak(`แจ้งเตือน ยา${recall.drugName||''}ถูกเรียกคืน กรุณาแยกยาออกทันที`);
+  document.getElementById('recallCloseBtn')?.addEventListener('click', () => document.getElementById('recallOverlay')?.remove());
+  document.getElementById('recallDisposalBtn')?.addEventListener('click', () => {
+    document.getElementById('recallOverlay')?.remove();
+    if (item) showDisposalModal(item);
+  });
+}
+
+function showAddRecallModal() {
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('addRecallOverlay')?.remove();
+  const html = `
+    <div class="overlay sheet-overlay" id="addRecallOverlay">
+      <div id="sheet-box">
+        <div id="sheet-handle"></div>
+        <div class="sheet-title">🚨 เพิ่มรายการ Recall</div>
+        <div class="form-field"><label class="form-label">ชื่อยา *</label><input class="form-input" id="rcDrugName" placeholder="เช่น Paracetamol 500mg"></div>
+        <div class="form-field"><label class="form-label">Lot No. *</label><input class="form-input" id="rcLotNo" placeholder="เช่น PC0021" style="font-family:'JetBrains Mono',monospace"></div>
+        <div class="form-field"><label class="form-label">GTIN (ถ้ามี)</label><input class="form-input" id="rcGtin" placeholder="เลข 13 หลัก" type="tel" style="font-family:'JetBrains Mono',monospace"></div>
+        <div class="form-field"><label class="form-label">เหตุผล *</label><input class="form-input" id="rcReason" placeholder="เช่น พบการปนเปื้อน ผิดมาตรฐาน"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="form-submit" style="flex:1;background:var(--glass);color:var(--ink);border:1px solid var(--glassb)" id="rcCancelBtn">ยกเลิก</button>
+          <button class="form-submit" style="flex:1.3;background:linear-gradient(135deg,#ff4d5e,#c81e2e)" id="rcConfirmBtn">🚨 เพิ่ม Recall</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('rcCancelBtn')?.addEventListener('click', () => document.getElementById('addRecallOverlay')?.remove());
+  document.getElementById('addRecallOverlay')?.addEventListener('click', e => { if (e.target.id==='addRecallOverlay') document.getElementById('addRecallOverlay')?.remove(); });
+  document.getElementById('rcConfirmBtn')?.addEventListener('click', async () => {
+    const drugName = document.getElementById('rcDrugName')?.value.trim();
+    const lotNo = document.getElementById('rcLotNo')?.value.trim();
+    const gtin  = document.getElementById('rcGtin')?.value.trim();
+    const reason = document.getElementById('rcReason')?.value.trim();
+    if (!drugName || !lotNo || !reason) { showToast('⚠ กรุณากรอกข้อมูลให้ครบ', '#ff9f43'); return; }
+    const record = { drugName, lotNo, gtin: gtin||'', reason, active: true,
+      issuedBy: S.user?.name||'Admin', issuedAt: firebase.firestore.FieldValue.serverTimestamp() };
+    if (typeof recallsRef !== 'undefined') {
+      await recallsRef.add(record).catch(e => console.warn('Recall add:', e));
+    } else {
+      S.recalls.push({ ...record, id: 'local-' + Date.now(), issuedAt: new Date() });
+    }
+    addLog('เพิ่ม Recall', `${drugName} · Lot ${lotNo} · ${reason}`);
+    sfx('success'); showToast(`✅ เพิ่ม Recall: ${drugName}`, '#ff4d5e');
+    document.getElementById('addRecallOverlay')?.remove();
+    renderAppBody();
+  });
+}
+
+// ── FEATURE: DISPOSAL LOG ─────────────────────────────
+function showDisposalModal(item) {
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('disposalOverlay')?.remove();
+  const html = `
+    <div class="overlay sheet-overlay" id="disposalOverlay">
+      <div id="sheet-box">
+        <div id="sheet-handle"></div>
+        <div class="sheet-title">🗑 บันทึกการทำลายยา</div>
+        <div style="font-size:12px;color:var(--ink3);margin-bottom:14px">HA/JCI — ต้องมีผู้ยืนยัน 2 คน · บันทึกเข้าระบบถาวร</div>
+        <div style="padding:12px;border-radius:13px;background:rgba(255,77,94,.1);border:1px solid rgba(255,77,94,.3);margin-bottom:16px">
+          <div style="font-weight:700;color:#ff4d5e">${item.name}</div>
+          <div style="font-size:12px;color:var(--ink2);margin-top:2px">Lot ${item.lot} · คงเหลือ ${item.qty} หน่วย</div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">เหตุผลการทำลาย *</label>
+          <select class="form-select" id="dispReason">
+            <option value="expired">หมดอายุ</option>
+            <option value="recall">ยาถูกเรียกคืน (Recall)</option>
+            <option value="damaged">เสียหาย / แตกหัก</option>
+            <option value="contaminated">ปนเปื้อน</option>
+            <option value="other">อื่นๆ</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="form-label">จำนวนที่ทำลาย (หน่วย) *</label>
+          <input class="form-input" id="dispQty" type="number" value="${item.qty}" min="1" max="${item.qty}">
+        </div>
+        <div class="form-field">
+          <label class="form-label">ผู้ทำลายที่ 1 * (ต้องเป็นเภสัชกร)</label>
+          <input class="form-input" id="dispPerson1" value="${S.user?.name||''}" placeholder="ชื่อ-นามสกุล">
+        </div>
+        <div class="form-field">
+          <label class="form-label">ผู้ยืนยันที่ 2 * (ต้องเป็นบุคคลอื่น)</label>
+          <input class="form-input" id="dispPerson2" placeholder="ชื่อเภสัชกร / ผู้ช่วย">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="form-submit" style="flex:1;background:var(--glass);color:var(--ink);border:1px solid var(--glassb)" id="dispCancelBtn">ยกเลิก</button>
+          <button class="form-submit" style="flex:1.3;background:linear-gradient(135deg,#ff4d5e,#c81e2e)" id="dispConfirmBtn">✓ ยืนยันทำลาย</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('dispCancelBtn')?.addEventListener('click', () => document.getElementById('disposalOverlay')?.remove());
+  document.getElementById('disposalOverlay')?.addEventListener('click', e => { if (e.target.id==='disposalOverlay') document.getElementById('disposalOverlay')?.remove(); });
+  document.getElementById('dispConfirmBtn')?.addEventListener('click', async () => {
+    const reason = document.getElementById('dispReason')?.value;
+    const qty    = parseInt(document.getElementById('dispQty')?.value || '0');
+    const p1     = document.getElementById('dispPerson1')?.value.trim();
+    const p2     = document.getElementById('dispPerson2')?.value.trim();
+    if (!p1 || !p2) { showToast('⚠ กรุณาระบุผู้ทำลายและผู้ยืนยัน', '#ff9f43'); return; }
+    if (p1.toLowerCase() === p2.toLowerCase()) { showToast('⚠ ต้องเป็น 2 คนที่แตกต่างกัน', '#ff4d5e'); return; }
+    if (!qty || qty <= 0) { showToast('⚠ กรุณาระบุจำนวน', '#ff9f43'); return; }
+    const record = { drugId: item.id, drugName: item.name, lot: item.lot, gtin: item.gtin||'',
+      qty, reason, approvedBy1: p1, approvedBy2: p2,
+      disposedAt: firebase.firestore.FieldValue.serverTimestamp(), dept: S.dept };
+    if (typeof disposalsRef !== 'undefined') {
+      await disposalsRef.add(record).catch(e => console.warn('Disposal save:', e));
+    }
+    const idx = S.items.findIndex(x => x.id === item.id);
+    if (idx >= 0) {
+      if (qty >= S.items[idx].qty) {
+        S.items.splice(idx, 1);
+        if (typeof drugsRef !== 'undefined' && item._fromFirestore) drugsRef.doc(item.id).delete().catch(()=>{});
+      } else {
+        S.items[idx].qty -= qty;
+        if (typeof drugsRef !== 'undefined' && item._fromFirestore) drugsRef.doc(item.id).update({ stock: S.items[idx].qty }).catch(()=>{});
+      }
+    }
+    addLog('ทำลายยา', `${item.name} · Lot ${item.lot} · ${qty} หน่วย · ${p1} & ${p2}`);
+    sfx('success'); vibrate([8,40,12]);
+    showToast(`✅ บันทึกการทำลาย ${item.name} × ${qty} หน่วย`, '#2ee6a6');
+    document.getElementById('disposalOverlay')?.remove();
+    document.getElementById('sheetOverlay')?.remove();
+    renderAppBody(); updateNavTabs();
+  });
+}
+
+// ── FEATURE: NEAR-EXPIRY RETURN WORKFLOW ──────────────
+function showReturnWorkflowModal(item) {
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('returnOverlay')?.remove();
+  const dl = daysLeft(item.exp);
+  const html = `
+    <div class="overlay sheet-overlay" id="returnOverlay">
+      <div id="sheet-box">
+        <div id="sheet-handle"></div>
+        <div class="sheet-title">↩ คืนยาบริษัท</div>
+        <div style="padding:12px;border-radius:13px;background:rgba(255,159,67,.1);border:1px solid rgba(255,159,67,.3);margin-bottom:16px">
+          <div style="font-weight:700;color:#ff9f43">${item.name}</div>
+          <div style="font-size:12px;color:var(--ink2);margin-top:2px">Lot ${item.lot} · หมดอายุ ${fmtDate(item.exp)} (${dl} วัน) · ${item.qty} หน่วย</div>
+        </div>
+        <div class="return-steps">
+          <div class="return-step"><div class="return-step-num">1</div><div><div class="return-step-title">แยกยาออกจากชั้น</div><div class="return-step-sub">ติด Label "รอคืน" และวางในพื้นที่กักยา</div></div></div>
+          <div class="return-step"><div class="return-step-num">2</div><div><div class="return-step-title">ติดต่อบริษัทยา</div><div class="return-step-sub">แจ้ง Lot ${item.lot} · ${item.qty} หน่วย · หมดอายุ ${fmtDate(item.exp)}</div></div></div>
+          <div class="return-step"><div class="return-step-num">3</div><div><div class="return-step-title">รับ Credit Note</div><div class="return-step-sub">แนบในแฟ้มเอกสาร HA และบันทึกใบส่งคืน</div></div></div>
+        </div>
+        <div class="form-field" style="margin-top:16px">
+          <label class="form-label">บริษัทผู้จำหน่าย</label>
+          <input class="form-input" id="retSupplier" placeholder="ชื่อบริษัทยา">
+        </div>
+        <div class="form-field">
+          <label class="form-label">วันที่แจ้งคืน</label>
+          <input class="form-input" type="date" id="retDate" value="${new Date().toISOString().slice(0,10)}">
+        </div>
+        <div class="form-field">
+          <label class="form-label">หมายเหตุ</label>
+          <input class="form-input" id="retNote" placeholder="ข้อมูลเพิ่มเติม">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="form-submit" style="flex:1;background:var(--glass);color:var(--ink);border:1px solid var(--glassb)" id="retCancelBtn">ปิด</button>
+          <button class="form-submit" style="flex:1.3;background:linear-gradient(135deg,#ff9f43,#e67e00)" id="retConfirmBtn">✓ บันทึกคืนยา</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('retCancelBtn')?.addEventListener('click', () => document.getElementById('returnOverlay')?.remove());
+  document.getElementById('retConfirmBtn')?.addEventListener('click', () => {
+    const supplier = document.getElementById('retSupplier')?.value.trim() || '—';
+    const date     = document.getElementById('retDate')?.value || new Date().toISOString().slice(0,10);
+    const note     = document.getElementById('retNote')?.value.trim() || '';
+    addLog('คืนยาบริษัท', `${item.name} · Lot ${item.lot} · ${supplier} · ${date}${note?' · '+note:''}`);
+    sfx('success'); vibrate([8,40]);
+    showToast(`✅ บันทึกคืนยา ${item.name} แล้ว`, '#ff9f43');
+    document.getElementById('returnOverlay')?.remove();
+  });
+}
+
+// ── FEATURE: DISPENSING RECORD ────────────────────────
+function showDispenseModal(item) {
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('dispenseOverlay')?.remove();
+  const html = `
+    <div class="overlay sheet-overlay" id="dispenseOverlay">
+      <div id="sheet-box">
+        <div id="sheet-handle"></div>
+        <div class="sheet-title">💊 จ่ายยา</div>
+        <div style="padding:12px;border-radius:13px;background:rgba(0,158,158,.1);border:1px solid rgba(0,158,158,.3);margin-bottom:16px">
+          <div style="font-weight:700;color:#009E9E">${item.name}</div>
+          <div style="font-size:12px;color:var(--ink2);margin-top:2px">Lot ${item.lot} · คงเหลือ ${item.qty} หน่วย</div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">HN (เลขประจำตัวผู้ป่วย)</label>
+          <input class="form-input" id="dspHN" placeholder="เช่น 12345678" type="tel" inputmode="numeric">
+        </div>
+        <div class="form-field">
+          <label class="form-label">Ward / แผนก</label>
+          <input class="form-input" id="dspWard" placeholder="เช่น OPD, IPD, ER" value="${S.dept}">
+        </div>
+        <div class="form-field">
+          <label class="form-label">จำนวนที่จ่าย *</label>
+          <input class="form-input" id="dspAmt" type="number" placeholder="1" min="1" max="${item.qty}" value="1">
+        </div>
+        <div class="form-field">
+          <label class="form-label">ผู้จ่ายยา</label>
+          <input class="form-input" id="dspBy" value="${S.user?.name||''}" placeholder="ชื่อเภสัชกร">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="form-submit" style="flex:1;background:var(--glass);color:var(--ink);border:1px solid var(--glassb)" id="dspCancelBtn">ยกเลิก</button>
+          <button class="form-submit" style="flex:1.3" id="dspConfirmBtn">✓ จ่ายยา</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('dspCancelBtn')?.addEventListener('click', () => document.getElementById('dispenseOverlay')?.remove());
+  document.getElementById('dispenseOverlay')?.addEventListener('click', e => { if (e.target.id==='dispenseOverlay') document.getElementById('dispenseOverlay')?.remove(); });
+  document.getElementById('dspConfirmBtn')?.addEventListener('click', async () => {
+    const hn  = document.getElementById('dspHN')?.value.trim() || '';
+    const ward = document.getElementById('dspWard')?.value.trim() || S.dept;
+    const amt = parseInt(document.getElementById('dspAmt')?.value || '0');
+    const by  = document.getElementById('dspBy')?.value.trim() || S.user?.name || '';
+    if (!amt || amt <= 0) { showToast('⚠ กรุณาระบุจำนวน', '#ff9f43'); return; }
+    if (amt > item.qty) { showToast(`⚠ สต๊อกไม่พอ (เหลือ ${item.qty} หน่วย)`, '#ff4d5e'); return; }
+    const record = { drugId: item.id, drugName: item.name, lot: item.lot, gtin: item.gtin||'',
+      qty: amt, hn, ward, dispensedBy: by,
+      dispensedAt: firebase.firestore.FieldValue.serverTimestamp(), dept: S.dept };
+    if (typeof dispensingRef !== 'undefined') {
+      await dispensingRef.add(record).catch(e => console.warn('Dispense save:', e));
+    }
+    const idx = S.items.findIndex(x => x.id === item.id);
+    if (idx >= 0) {
+      S.items[idx].qty -= amt;
+      if (S.items[idx].qty <= 0) {
+        S.items.splice(idx, 1);
+        if (typeof drugsRef !== 'undefined' && item._fromFirestore) drugsRef.doc(item.id).delete().catch(()=>{});
+      } else {
+        if (typeof drugsRef !== 'undefined' && item._fromFirestore) drugsRef.doc(item.id).update({ stock: S.items[idx].qty }).catch(()=>{});
+      }
+    }
+    addLog('จ่ายยา', `${item.name} × ${amt} · HN: ${hn||'—'} · ${ward} · ${by}`);
+    sfx('success'); vibrate([8,40]);
+    showToast(`✅ จ่าย ${item.name} × ${amt} หน่วย`, '#2ee6a6');
+    document.getElementById('dispenseOverlay')?.remove();
+    document.getElementById('sheetOverlay')?.remove();
+    renderAppBody(); updateNavTabs();
+  });
+}
+
+// ── FEATURE: BATCH SCAN SUMMARY ───────────────────────
+function showBatchSummary() {
+  if (!S.batchSession || S.batchSession.items.length === 0) return;
+  const items = S.batchSession.items;
+  const nearExpiry = items.filter(it => ['RED','ORANGE'].includes(itemStatus(it).key || ''));
+  const dupMap = {};
+  items.forEach(it => { const k = `${it.name}|${it.lot}`; dupMap[k] = (dupMap[k]||0) + 1; });
+  const dupCount = Object.values(dupMap).filter(v => v > 1).length;
+  const mins = Math.max(1, Math.round((Date.now() - S.batchSession.startTime) / 60000));
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('batchSumOverlay')?.remove();
+  const html = `
+    <div class="overlay" id="batchSumOverlay">
+      <div id="confirm-box" style="border:1px solid #9d8cff55">
+        <div style="font-size:34px;text-align:center">📋</div>
+        <div style="font-size:17px;font-weight:700;text-align:center;margin-top:8px;color:var(--ink)">สรุปการสแกนชุดนี้</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px">
+          <div class="batch-kpi-cell" style="--bc:#009E9E"><div class="batch-kpi-val" style="color:#009E9E">${items.length}</div><div class="batch-kpi-lbl">รับเข้าทั้งหมด</div></div>
+          <div class="batch-kpi-cell" style="--bc:#ff4d5e"><div class="batch-kpi-val" style="color:#ff4d5e">${nearExpiry.length}</div><div class="batch-kpi-lbl">ใกล้/หมดอายุ</div></div>
+          <div class="batch-kpi-cell" style="--bc:#ff9f43"><div class="batch-kpi-val" style="color:#ff9f43">${dupCount}</div><div class="batch-kpi-lbl">Lot ซ้ำ</div></div>
+          <div class="batch-kpi-cell" style="--bc:#9d8cff"><div class="batch-kpi-val" style="color:#9d8cff">${mins}</div><div class="batch-kpi-lbl">นาที</div></div>
+        </div>
+        ${nearExpiry.length > 0 ? `<div style="margin-top:10px;font-size:12px;color:#ff9f43;background:rgba(255,159,67,.1);border-radius:10px;padding:10px;line-height:1.6">⚠ ใกล้/หมดอายุ: ${[...new Set(nearExpiry.map(it=>it.name))].join(', ')}</div>` : ''}
+        <div style="display:flex;gap:10px;margin-top:16px">
+          <button id="bsClose" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ปิด</button>
+          <button id="bsExport" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#2ee6a6,#13a37f)">📥 Export CSV</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('bsClose')?.addEventListener('click', () => document.getElementById('batchSumOverlay')?.remove());
+  document.getElementById('bsExport')?.addEventListener('click', () => { exportCSV(); document.getElementById('batchSumOverlay')?.remove(); });
+}
+
+// ── FEATURE: LASA CONSECUTIVE SCAN DETECTION ──────────
+function checkLASA(name) {
+  if (!name || !S.lastScanNames.length) return;
+  const prev = S.lastScanNames[0];
+  if (!prev) return;
+  const norm = s => s.toLowerCase().replace(/[\s\-\.]+/g, '').slice(0, 10);
+  const a = norm(name); const b = norm(prev);
+  if (a === b) return; // same drug, not LASA
+  // LASA: same first 5 chars, or Levenshtein distance <= 2 for short names
+  const prefix5 = a.slice(0,5) === b.slice(0,5) && a.length > 4;
+  const closeStr = a.length <= 10 && b.length <= 10 && levenshtein(a, b) <= 2;
+  if (!prefix5 && !closeStr) return;
+  sfx('error'); vibrate([30,60,30]);
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('lasaOverlay')?.remove();
+  const html = `
+    <div class="overlay" id="lasaOverlay">
+      <div id="confirm-box" style="border:2px solid #ff9f43">
+        <div style="font-size:40px;text-align:center">◆</div>
+        <div style="font-size:17px;font-weight:700;text-align:center;color:#ff9f43;margin-top:8px">LASA Warning</div>
+        <div style="font-size:13px;color:var(--ink2);text-align:center;margin-top:10px;line-height:1.7">
+          ยา 2 รายการที่สแกนต่อกันมีชื่อคล้ายกัน<br>
+          <span style="font-weight:700;color:var(--ink)">"${prev}"</span><br>
+          <span style="font-weight:700;color:var(--ink)">"${name}"</span>
+        </div>
+        <div style="font-size:12px;color:var(--ink3);text-align:center;margin-top:6px">กรุณาตรวจสอบฉลากอีกครั้งก่อนนำขึ้นชั้น</div>
+        <button id="lasaCloseBtn" style="width:100%;margin-top:16px;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#ff9f43,#e67e00)">✓ ตรวจสอบแล้ว รับทราบ</button>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  speak(`แจ้งเตือน LASA ยา${name}คล้ายกับ${prev} กรุณาตรวจสอบ`);
+  document.getElementById('lasaCloseBtn')?.addEventListener('click', () => document.getElementById('lasaOverlay')?.remove());
+}
+
+function levenshtein(a, b) {
+  const m = a.length; const n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i===0?j:j===0?i:0));
+  for (let i=1;i<=m;i++) for (let j=1;j<=n;j++) {
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  }
+  return dp[m][n];
+}
+
+// ── FEATURE: EXPORT CSV ───────────────────────────────
+function exportCSV() {
+  const headers = ['ชื่อยา','Generic','Lot No.','วันหมดอายุ','วันผลิต','จำนวน','ตำแหน่ง','สถานะ','GTIN','แผนก'];
+  const rows = S.items.map(it => {
+    const st = itemStatus(it);
+    const statusTh = { RED:'ห้ามใช้', ORANGE:'ใกล้หมด', YELLOW:'เฝ้าระวัง', GREEN:'ปลอดภัย' }[st.key] || st.key;
+    return [it.name, it.gen||'', it.lot,
+      it.exp instanceof Date ? it.exp.toLocaleDateString('th-TH') : '',
+      it.mfd instanceof Date ? it.mfd.toLocaleDateString('th-TH') : '',
+      it.qty,
+      it.loc === 'FRONT_SHELF' ? 'หน้าเคาน์เตอร์' : 'คลัง',
+      statusTh, it.gtin||'', it.dept||S.dept,
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',');
+  });
+  const csv = '﻿' + headers.join(',') + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `pharmacare-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+  showToast('📥 Export CSV สำเร็จ', '#2ee6a6');
+  addLog('Export CSV', `${S.items.length} รายการ`);
+}
+
+// ── FEATURE: THAI FDA LOOKUP ──────────────────────────
+function lookupThaiFDA(name, gtin) {
+  const q = encodeURIComponent(name || gtin || '');
+  const url = gtin
+    ? `https://pertento.fda.moph.go.th/FDA_SEARCH_DRUG/SEARCH_DRUG/frm-SearchDrug.aspx`
+    : `https://pertento.fda.moph.go.th/FDA_SEARCH_DRUG/SEARCH_DRUG/frm-SearchDrug.aspx`;
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('fdaOverlay')?.remove();
+  const html = `
+    <div class="overlay" id="fdaOverlay">
+      <div id="confirm-box" style="border:1px solid rgba(0,158,158,.4)">
+        <div style="font-size:34px;text-align:center">🔍</div>
+        <div style="font-size:17px;font-weight:700;text-align:center;margin-top:8px;color:var(--ink)">ค้นหาในฐานข้อมูล อย.</div>
+        <div style="font-size:13px;color:var(--ink2);text-align:center;margin-top:8px;line-height:1.6">
+          ยา: <b>${name||gtin||'—'}</b><br>
+          <span style="font-size:11px;color:var(--ink3)">FDA Thailand Drug Database<br>สำนักงานคณะกรรมการอาหารและยา</span>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:16px">
+          <button id="fdaClose" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ปิด</button>
+          <button id="fdaOpen" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009E9E,#007070)">🌐 เปิดเว็บ อย.</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+  document.getElementById('fdaClose')?.addEventListener('click', () => document.getElementById('fdaOverlay')?.remove());
+  document.getElementById('fdaOpen')?.addEventListener('click', () => {
+    window.open(url, '_blank', 'noopener');
+    document.getElementById('fdaOverlay')?.remove();
+  });
+}
+
 // ── BOOTSTRAP ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(S.theme);
@@ -3893,6 +4530,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Try Firestore
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
   try { initDrugCache(); } catch(e) { console.warn('Drug cache init:', e); }
+  try { initRecalls(); } catch(e) { console.warn('Recalls init:', e); }
+
+  // Periodic notify check every 30 minutes
+  setInterval(() => { if (S.screen === 'app') checkAndNotify(); }, 30 * 60 * 1000);
 
   // If session was restored, start Firestore listener now
   if (S.screen === 'app' && S.user) {

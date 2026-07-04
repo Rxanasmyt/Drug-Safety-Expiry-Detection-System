@@ -2580,6 +2580,174 @@ body {
   animation: prefetchPop .38s cubic-bezier(.34,1.56,.64,1) forwards;
 }
 
+/* ── FEATURE: DASHBOARD ANALYTICS ───────────────────── */
+.dash-chart-wrap {
+  background: var(--glass);
+  border: 1px solid var(--glassb);
+  border-radius: 16px;
+  padding: 16px 12px 12px;
+  margin-bottom: 4px;
+  overflow-x: auto;
+}
+.dash-chart-legend {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 8px;
+}
+.dash-chart-legend span {
+  font-size: 10px;
+  color: var(--ink3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dash-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.dash-action-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+.dash-action-btn {
+  flex: 1;
+  padding: 13px;
+  border-radius: 14px;
+  border: 1px solid var(--glassb);
+  background: var(--glass);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Sarabun', sans-serif;
+  cursor: pointer;
+  transition: background .15s;
+}
+.dash-action-btn:active { opacity: .8; }
+.dash-action-btn-red {
+  background: rgba(255,77,94,.12);
+  color: #ff4d5e;
+  border-color: rgba(255,77,94,.3);
+}
+
+/* ── FEATURE: RECALL BANNER ──────────────────────────── */
+.recall-banner {
+  background: rgba(255,77,94,.1);
+  border: 1px solid rgba(255,77,94,.3);
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin: 8px 0 16px;
+  animation: pulseIn .4s ease;
+}
+.recall-banner-title {
+  font-weight: 700;
+  color: #ff4d5e;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.recall-banner-item {
+  font-size: 12px;
+  color: var(--ink2);
+  line-height: 1.7;
+}
+
+/* ── FEATURE: DRUG DETAIL SHEET ACTIONS ─────────────── */
+.sheet-action-btn {
+  flex: 1;
+  padding: 11px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--glassb);
+  background: var(--glass);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Sarabun', sans-serif;
+  cursor: pointer;
+  text-align: center;
+  transition: opacity .15s;
+}
+.sheet-action-btn:active { opacity: .75; }
+.sheet-action-transfer { background: rgba(157,140,255,.12); color: #9d8cff; border-color: rgba(157,140,255,.3); }
+.sheet-action-dispense { background: rgba(0,158,158,.12); color: #009E9E; border-color: rgba(0,158,158,.3); }
+.sheet-action-return   { background: rgba(255,159,67,.12); color: #ff9f43; border-color: rgba(255,159,67,.3); }
+.sheet-action-disposal { background: rgba(255,77,94,.12); color: #ff4d5e; border-color: rgba(255,77,94,.3); }
+
+/* ── FEATURE: RETURN WORKFLOW STEPS ─────────────────── */
+.return-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+}
+.return-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.return-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff9f43, #e67e00);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.return-step-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+.return-step-sub {
+  font-size: 11px;
+  color: var(--ink3);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* ── FEATURE: BATCH SCAN SUMMARY ────────────────────── */
+.batch-kpi-cell {
+  background: var(--glass);
+  border: 1px solid var(--glassb);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
+}
+.batch-kpi-val {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.batch-kpi-lbl {
+  font-size: 11px;
+  color: var(--ink3);
+  margin-top: 4px;
+}
+
+/* ── FEATURE: CONFIG ACTION BUTTON ──────────────────── */
+.cfg-action-btn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--glassb);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Sarabun', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .15s;
+}
+.cfg-action-btn:active { opacity: .75; }
+
 /* ── REDUCED MOTION ───────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
