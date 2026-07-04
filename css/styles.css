@@ -1716,6 +1716,109 @@ body {
   font-family: 'Sarabun', sans-serif;
 }
 
+/* ── IN-APP PHOTO CAPTURE OVERLAY ───────────────────── */
+.pcap-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: #000; display: flex; flex-direction: column;
+  font-family: 'Sarabun', sans-serif;
+}
+.pcap-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px;
+  padding-top: max(14px, calc(14px + env(safe-area-inset-top)));
+  background: linear-gradient(180deg, rgba(0,0,0,.85) 0%, rgba(0,0,0,.4) 100%);
+  color: #fff; position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+}
+.pcap-close-btn, .pcap-torch-btn {
+  width: 40px; height: 40px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,.12); color: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  font-size: 18px; backdrop-filter: blur(8px);
+}
+.pcap-torch-btn.active { background: rgba(255,200,0,.35); color: #ffd700; }
+.pcap-header-text { flex: 1; min-width: 0; }
+.pcap-title { font-size: 15px; font-weight: 800; color: #fff; }
+.pcap-sub { font-size: 10.5px; color: rgba(255,255,255,.7); margin-top: 2px; line-height: 1.3; }
+.pcap-viewfinder {
+  flex: 1; position: relative; overflow: hidden; background: #111;
+}
+/* corner bracket guides */
+.pcap-corner {
+  position: absolute; width: 32px; height: 32px; z-index: 4;
+  border-color: rgba(0,230,190,.9); border-style: solid;
+  filter: drop-shadow(0 0 4px rgba(0,230,190,.5));
+}
+.pcap-tl { top: 22%; left: 8%; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+.pcap-tr { top: 22%; right: 8%; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+.pcap-bl { bottom: 28%; left: 8%; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+.pcap-br { bottom: 28%; right: 8%; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+@keyframes cornerPulse { 0%,100%{opacity:.7} 50%{opacity:1} }
+.pcap-corner { animation: cornerPulse 2s ease-in-out infinite; }
+/* stability pill */
+.pcap-stab-pill {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 5;
+  margin-top: max(60px, calc(60px + env(safe-area-inset-top)));
+  display: flex; align-items: center; gap: 7px;
+  background: rgba(0,0,0,.6); backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.15); border-radius: 20px;
+  padding: 6px 14px; color: #fff; font-size: 12px; font-weight: 700;
+  white-space: nowrap;
+}
+.pcap-stab-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #ff4d5e; transition: background .3s;
+}
+/* processing dim */
+.pcap-viewfinder[data-processing]::after {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 6;
+}
+/* footer */
+.pcap-footer {
+  display: flex; align-items: center; justify-content: space-around;
+  padding: 24px 32px;
+  padding-bottom: max(24px, calc(24px + env(safe-area-inset-bottom)));
+  background: linear-gradient(0deg, rgba(0,0,0,.9) 0%, rgba(0,0,0,.5) 100%);
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 5;
+}
+/* gallery button */
+.pcap-gallery-btn {
+  width: 48px; height: 48px; border-radius: 14px; border: none;
+  background: rgba(255,255,255,.14); color: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(8px);
+}
+/* shutter button */
+.pcap-shutter {
+  width: 76px; height: 76px; border-radius: 50%; border: none;
+  background: none; cursor: pointer; position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.pcap-shutter-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.85);
+  transition: transform .1s;
+}
+.pcap-shutter-dot {
+  position: absolute; inset: 7px; border-radius: 50%;
+  background: #fff; transition: transform .1s, background .1s;
+}
+.pcap-shutter:active .pcap-shutter-dot { transform: scale(.82); background: #ddd; }
+.pcap-shutter:disabled .pcap-shutter-dot { background: rgba(255,255,255,.3); }
+/* auto-capture button */
+.pcap-auto-btn {
+  min-width: 52px; padding: 10px 12px; border-radius: 12px; border: 2px solid rgba(255,255,255,.3);
+  background: rgba(255,255,255,.1); color: rgba(255,255,255,.7); cursor: pointer;
+  font-size: 11px; font-weight: 800; letter-spacing: .6px;
+  font-family: 'Sarabun', sans-serif; backdrop-filter: blur(8px);
+  transition: all .2s;
+}
+.pcap-auto-btn.active {
+  border-color: #2ee6a6; color: #2ee6a6; background: rgba(46,230,166,.18);
+}
+
 /* ── SCAN TAB: 3-BUTTON ACTION ROW (legacy) ─────────── */
 .scan-actions-3 {
   display: grid; grid-template-columns: 1.4fr 1fr 1fr;

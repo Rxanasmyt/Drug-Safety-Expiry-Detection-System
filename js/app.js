@@ -18,6 +18,8 @@ const S = {
   rapidMode: false, scanCount: 0,
   manualOpen: false,
   voiceActive: false,
+  autoCapture: false,
+  drugCache: JSON.parse(localStorage.getItem('_drugCache') || '{}'),
   stockFilter: 'all', stockSort: 'exp', stockSearch: '',
   theme: localStorage.getItem('theme') || 'dark',
   settings: { threshRed: 30, threshOrange: 60, threshYellow: 90, soundOn: true, geminiKey: '' },
@@ -40,64 +42,103 @@ const S = {
 // ข้อมูลจริงมาจาก Firestore เท่านั้น — ไม่มีข้อมูลทดลองหรือข้อมูลที่สร้างขึ้นเอง
 
 // ── GEMINI VISION ─────────────────────────────────────
+// Prompt is short because responseSchema enforces JSON structure
 const DRUG_LABEL_PROMPT = [
-  'คุณเป็น AI ผู้เชี่ยวชาญอ่านฉลากยาไทย ตอบเป็น JSON บรรทัดเดียวเท่านั้น ห้ามอธิบายหรือมีข้อความอื่น:',
-  '{"name":"ชื่อยา","generic":"generic name หรือ null","strength":"ความแรง หรือ null","lot":"Lot number หรือ null","expiry":"YYYY-MM-DD หรือ null","mfd":"YYYY-MM-DD หรือ null","form":"tab|cap|vial|liq|sach|pen หรือ null","gtin":"13 digits หรือ null"}',
+  'อ่านฉลากยาไทย กรอกข้อมูลที่มองเห็นในภาพ null=ไม่มีข้อมูล ห้ามเดา',
   '',
-  '### รูปแบบวันที่บนยาไทย (ต้องอ่านให้ได้ทุกแบบ)',
-  'แบบ A — DD MM YY เว้นวรรค (พบบ่อยที่สุดบนยาไทย): "06 02 25"=2025-02-06 | "06 02 27"=2027-02-06 | "12 08 26"=2026-08-12',
-  'แบบ B — DD/MM/YY หรือ DD-MM-YY: "06/02/25"=2025-02-06 | "15-03-27"=2027-03-15',
-  'แบบ C — MM/YYYY: "02/2025"=2025-02-01 | "08/2027"=2027-08-01',
-  'แบบ D — MMM YYYY: "FEB 2025"=2025-02-01 | "APR 2027"=2027-04-01 | "ก.พ. 2568"=2025-02-01',
-  'แบบ E — ปีพุทธศักราช: ลบ 543 → 2568=2025, 2569=2026, 2570=2027',
+  'วันที่ (อ่านทุกรูปแบบ):',
+  '• DD MM YY เว้นวรรค (บ่อยที่สุด): "06 02 25"=2025-02-06 | "12 08 26"=2026-08-12',
+  '• DD/MM/YY หรือ DD-MM-YY: "06/02/25"=2025-02-06',
+  '• MM/YYYY: "02/2025"=2025-02-01 | MMM YYYY: "FEB 2025"=2025-02-01',
+  '• พ.ศ. ลบ 543: 2568=2025, 2569=2026, 2570=2027',
+  '• เห็น 2 วันไม่มีป้าย: วันเก่ากว่า=mfd, วันใหม่กว่า=expiry',
   '',
-  '### ถ้าเห็น 2 วันที่ไม่มีป้าย EXP/MFD',
-  'วันที่น้อยกว่า (ปีเก่ากว่า) = mfd (วันผลิต) | วันที่มากกว่า (ปีใหม่กว่า) = expiry (วันหมดอายุ)',
-  'ตัวอย่าง: บรรทัด "06 02 25" และ "06 02 27" → mfd=2025-02-06, expiry=2027-02-06',
-  '',
-  '### Lot/Batch number',
-  'ค้นหาคำ: Lot, LOT, Lot No, L/N, Batch, Batch No, B.No, BN, ครั้งที่ผลิต',
-  'รูปแบบที่พบ: T680094 | ST68-6470 | 240501A | AB2024001 | Osra5.5_sac_LAO_22R01',
-  'ถ้าเห็นกลุ่มตัวอักษร+ตัวเลขบรรทัดเดียวที่ไม่ใช่วันที่ ไม่ใช่ชื่อยา ให้ถือว่าเป็น Lot',
-  '',
-  '### GTIN (barcode number)',
-  'อ่านตัวเลข 13 หลักที่พิมพ์ใต้เส้นบาร์โค้ด เช่น 8850678234915 | 8851824821027 | 8859651450017',
-  '',
-  '### ชื่อยา',
-  'ใช้ trade name ที่พิมพ์ใหญ่ที่สุดบนฉลาก หรือ generic name ถ้าไม่มี trade name',
-  'ตอบ null ทุก field ที่ไม่มีข้อมูลในภาพ ห้ามเดา',
+  'Lot: คำ Lot/LOT/L/N/Batch/BN | ตัวอย่าง T680094|ST68-6470|240501A|Osra5.5_sac_LAO_22R01',
+  'GTIN: ตัวเลข 13 หลักใต้เส้นบาร์โค้ด',
+  'ชื่อยา: trade name ที่พิมพ์ใหญ่ที่สุด หรือ generic name',
 ].join('\n');
 
-function compressForAI(file, maxPx = 1200, quality = 0.80) {
+// Gemini responseSchema — enforces JSON without prompt overhead
+const GEMINI_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    name:    { type: 'STRING', nullable: true },
+    generic: { type: 'STRING', nullable: true },
+    strength:{ type: 'STRING', nullable: true },
+    lot:     { type: 'STRING', nullable: true },
+    expiry:  { type: 'STRING', nullable: true },
+    mfd:     { type: 'STRING', nullable: true },
+    form:    { type: 'STRING', nullable: true },
+    gtin:    { type: 'STRING', nullable: true },
+  },
+};
+
+// Compress image before sending — accepts File/Blob or canvas element
+function compressForAI(src, maxPx = 1400, quality = 0.84) {
+  // Direct canvas path (from in-app camera — skip Image() loading)
+  if (src instanceof HTMLCanvasElement) {
+    const scale = Math.min(1, maxPx / Math.max(src.width, src.height));
+    if (scale < 1) {
+      const c2 = document.createElement('canvas');
+      c2.width = Math.round(src.width * scale);
+      c2.height = Math.round(src.height * scale);
+      c2.getContext('2d').drawImage(src, 0, 0, c2.width, c2.height);
+      return Promise.resolve(c2.toDataURL('image/jpeg', quality).split(',')[1]);
+    }
+    return Promise.resolve(src.toDataURL('image/jpeg', quality).split(',')[1]);
+  }
+  // File/Blob path
   return new Promise(resolve => {
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(src);
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
       const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
       const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       resolve(c.toDataURL('image/jpeg', quality).split(',')[1]);
     };
     img.onerror = () => {
       const r = new FileReader();
       r.onload = () => resolve(r.result.split(',')[1]);
       r.onerror = () => resolve(null);
-      r.readAsDataURL(file);
+      r.readAsDataURL(src);
     };
     img.src = url;
   });
 }
 
-async function analyzeWithGemini(file) {
+// Merge AI result with local drug cache (by GTIN) for instant name lookup
+function _mergeDrugCache(data) {
+  if (!data) return data;
+  const gtin = data.gtin;
+  if (gtin && S.drugCache[gtin]) {
+    const cached = S.drugCache[gtin];
+    return {
+      name:     data.name    || cached.name    || null,
+      generic:  data.generic || cached.generic || null,
+      strength: data.strength|| cached.strength|| null,
+      lot:      data.lot, expiry: data.expiry, mfd: data.mfd,
+      form:     data.form    || cached.form    || null,
+      gtin,
+    };
+  }
+  return data;
+}
+
+function _saveDrugCache(data) {
+  if (!data?.gtin || !data?.name) return;
+  S.drugCache[data.gtin] = { name: data.name, generic: data.generic, strength: data.strength, form: data.form };
+  try { localStorage.setItem('_drugCache', JSON.stringify(S.drugCache)); } catch(_) {}
+}
+
+async function analyzeWithGemini(src) {
   const key = S.settings.geminiKey || localStorage.getItem('geminiKey') || '';
   if (!key) return null;
-  const b64 = await compressForAI(file);
+  const b64 = await compressForAI(src);
   if (!b64) return null;
-  const mime = 'image/jpeg';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${encodeURIComponent(key)}`,
     {
@@ -106,9 +147,14 @@ async function analyzeWithGemini(file) {
       body: JSON.stringify({
         contents: [{ parts: [
           { text: DRUG_LABEL_PROMPT },
-          { inline_data: { mime_type: mime, data: b64 } },
+          { inline_data: { mime_type: 'image/jpeg', data: b64 } },
         ]}],
-        generationConfig: { temperature: 0 },
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 256,
+          responseMimeType: 'application/json',
+          responseSchema: GEMINI_SCHEMA,
+        },
       }),
     }
   );
@@ -116,10 +162,11 @@ async function analyzeWithGemini(file) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.error?.message || `HTTP ${res.status}`);
   }
-  const data = await res.json();
-  const raw = (data.candidates?.[0]?.content?.parts?.[0]?.text || '{}')
-    .replace(/^```json\s*/,'').replace(/\s*```$/,'').trim();
-  return JSON.parse(raw);
+  const resp = await res.json();
+  const raw = (resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim();
+  const data = JSON.parse(raw);
+  _saveDrugCache(data);
+  return _mergeDrugCache(data);
 }
 
 // ── HELPERS ───────────────────────────────────────────
@@ -1436,7 +1483,11 @@ function bindScanTab() {
   const photoBtn = document.getElementById('photoScanBtn');
   const photoInput = document.getElementById('photoScanInput');
   if (photoBtn && photoInput) {
-    photoBtn.addEventListener('click', () => photoInput.click());
+    // Primary: open in-app camera; fallback: file input (if no getUserMedia)
+    photoBtn.addEventListener('click', () => {
+      if (navigator.mediaDevices?.getUserMedia) { openPhotoCap(); }
+      else { photoInput.click(); }
+    });
     photoInput.addEventListener('change', () => {
       if (photoInput.files && photoInput.files[0]) handlePhotoScan(photoInput.files[0]);
       photoInput.value = '';
@@ -1636,6 +1687,280 @@ async function handleOCRFile(file) {
   }
 }
 
+// ── IN-APP CAMERA CAPTURE ─────────────────────────────
+// Stays open between shots in rapid mode — no camera init latency
+let _pcStream = null;       // MediaStream
+let _pcAnimFrame = null;    // rAF for stability detection
+let _pcAutoLock = false;    // prevent double-trigger of auto-capture
+
+function openPhotoCap() {
+  if (document.getElementById('photoCap')) return; // already open
+  if (!navigator.mediaDevices?.getUserMedia) {
+    document.getElementById('photoScanInput')?.click();
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.id = 'photoCap';
+  overlay.className = 'pcap-overlay';
+  overlay.innerHTML = `
+    <div class="pcap-header">
+      <button class="pcap-close-btn" id="pcapClose" aria-label="ปิด">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+      <div class="pcap-header-text">
+        <div class="pcap-title">📷 ถ่ายฉลากยา</div>
+        <div class="pcap-sub">เล็งด้านที่มีชื่อยาให้ชัด · แตะปุ่มกล้องหรือหน้าจอเพื่อถ่าย</div>
+      </div>
+      <button class="pcap-torch-btn" id="pcapTorch" style="display:none" aria-label="ไฟฉาย">🔦</button>
+    </div>
+
+    <div class="pcap-viewfinder" id="pcapVF">
+      <video id="pcapVideo" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover"></video>
+      <canvas id="pcapStabCanvas" width="64" height="36" style="display:none"></canvas>
+
+      <!-- Corner brackets -->
+      <div class="pcap-corner pcap-tl"></div>
+      <div class="pcap-corner pcap-tr"></div>
+      <div class="pcap-corner pcap-bl"></div>
+      <div class="pcap-corner pcap-br"></div>
+
+      <!-- Stability pill -->
+      <div class="pcap-stab-pill" id="pcapStabPill">
+        <div class="pcap-stab-dot" id="pcapStabDot"></div>
+        <span id="pcapStabTxt">กำลังเปิดกล้อง...</span>
+      </div>
+
+      <!-- Flash overlay -->
+      <div id="pcapFlash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .12s"></div>
+    </div>
+
+    <div class="pcap-footer">
+      <button class="pcap-gallery-btn" id="pcapGallery" title="เลือกจากอัลบั้ม">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M16 2h4l-4 4H4l4-4h8z"/></svg>
+      </button>
+      <button class="pcap-shutter" id="pcapShutter" aria-label="ถ่ายภาพ">
+        <div class="pcap-shutter-ring"></div>
+        <div class="pcap-shutter-dot"></div>
+      </button>
+      <button class="pcap-auto-btn${S.autoCapture ? ' active' : ''}" id="pcapAutoBtn" title="Auto-Capture">
+        AUTO
+      </button>
+    </div>
+    <input type="file" id="pcapGalleryInput" accept="image/*" style="display:none">
+  `;
+  document.body.appendChild(overlay);
+
+  // Event bindings
+  document.getElementById('pcapClose').addEventListener('click', () => closePhotoCap(true));
+  document.getElementById('pcapShutter').addEventListener('click', captureFromCam);
+  document.getElementById('pcapVF').addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    captureFromCam();
+  });
+  document.getElementById('pcapAutoBtn').addEventListener('click', e => {
+    e.stopPropagation();
+    S.autoCapture = !S.autoCapture;
+    e.currentTarget.classList.toggle('active', S.autoCapture);
+    showToast(S.autoCapture ? '🤖 Auto-Capture เปิด — นิ่งกล้องแล้วถ่ายอัตโนมัติ' : 'Auto-Capture ปิด', '#7c6cff', 1800);
+  });
+  const galleryBtn = document.getElementById('pcapGallery');
+  const galleryInput = document.getElementById('pcapGalleryInput');
+  galleryBtn.addEventListener('click', e => { e.stopPropagation(); galleryInput.click(); });
+  galleryInput.addEventListener('change', () => {
+    if (galleryInput.files?.[0]) {
+      closePhotoCap(true);
+      handlePhotoScan(galleryInput.files[0]);
+      galleryInput.value = '';
+    }
+  });
+
+  _startPhotoCam();
+}
+
+async function _startPhotoCam() {
+  try {
+    _pcStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    const video = document.getElementById('pcapVideo');
+    if (!video) { closePhotoCap(true); return; }
+    video.srcObject = _pcStream;
+    await video.play();
+
+    // Enable continuous autofocus if supported
+    const track = _pcStream.getVideoTracks()[0];
+    const caps = track.getCapabilities?.() || {};
+    if (caps.focusMode?.includes?.('continuous')) {
+      track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+    }
+
+    // Torch button
+    if (caps.torch) {
+      const tBtn = document.getElementById('pcapTorch');
+      if (tBtn) {
+        tBtn.style.display = 'flex';
+        let torchOn = false;
+        tBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          torchOn = !torchOn;
+          track.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(() => {});
+          tBtn.textContent = torchOn ? '🔆' : '🔦';
+          tBtn.classList.toggle('active', torchOn);
+        });
+      }
+    }
+
+    _startStabilityLoop(video);
+  } catch(e) {
+    console.warn('Camera error:', e);
+    closePhotoCap(true);
+    showToast('⚠ ไม่สามารถเปิดกล้องได้ — ใช้ไฟล์แทน', '#ff9f43', 2500);
+    document.getElementById('photoScanInput')?.click();
+  }
+}
+
+function _startStabilityLoop(video) {
+  const canvas = document.getElementById('pcapStabCanvas');
+  const dot = document.getElementById('pcapStabDot');
+  const txt = document.getElementById('pcapStabTxt');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let prev = null;
+  let stableN = 0;
+
+  function frame() {
+    if (!_pcStream || !video.videoWidth) { _pcAnimFrame = requestAnimationFrame(frame); return; }
+    ctx.drawImage(video, 0, 0, 64, 36);
+    const curr = ctx.getImageData(0, 0, 64, 36).data;
+    if (prev) {
+      let diff = 0;
+      for (let i = 0; i < curr.length; i += 4)
+        diff += Math.abs(curr[i] - prev[i]) + Math.abs(curr[i+1] - prev[i+1]) + Math.abs(curr[i+2] - prev[i+2]);
+      const motion = diff / (64 * 36 * 3); // 0-255 per pixel
+      stableN = motion < 4 ? Math.min(stableN + 1, 14) : 0;
+      const stable = stableN >= 10; // ~1s
+      const almostStable = stableN >= 5;
+      if (dot) dot.style.background = stable ? '#2ee6a6' : almostStable ? '#ffd23f' : '#ff4d5e';
+      if (txt) txt.textContent = stable ? 'นิ่งแล้ว ✓' : almostStable ? 'กำลังนิ่ง...' : 'ถือนิ่งๆ';
+      if (stable && S.autoCapture && !_pcAutoLock) {
+        _pcAutoLock = true;
+        setTimeout(() => { captureFromCam(); setTimeout(() => { _pcAutoLock = false; }, 2500); }, 200);
+      }
+    }
+    prev = new Uint8ClampedArray(curr);
+    _pcAnimFrame = requestAnimationFrame(frame);
+  }
+  _pcAnimFrame = requestAnimationFrame(frame);
+}
+
+async function captureFromCam() {
+  const video = document.getElementById('pcapVideo');
+  if (!video || !video.videoWidth) return;
+
+  // Flash
+  const flash = document.getElementById('pcapFlash');
+  if (flash) { flash.style.opacity = '1'; setTimeout(() => flash.style.opacity = '0', 140); }
+  vibrate([10]);
+
+  // Capture frame → compress directly from canvas (no File/Blob overhead)
+  const canvas = document.createElement('canvas');
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  // Show processing state on viewfinder
+  const vf = document.getElementById('pcapVF');
+  if (vf) vf.setAttribute('data-processing', '1');
+  const shutter = document.getElementById('pcapShutter');
+  if (shutter) { shutter.disabled = true; shutter.style.opacity = '.4'; }
+
+  if (!S.rapidMode) {
+    closePhotoCap(false); // keep stream alive in case rapid mode is toggled
+  }
+
+  const b64 = await compressForAI(canvas);
+  await _processDrugPhoto(b64, /* fromCam */ true);
+
+  // Restore camera UI (rapid mode: stays open)
+  if (vf) vf.removeAttribute('data-processing');
+  if (shutter) { shutter.disabled = false; shutter.style.opacity = ''; }
+}
+
+function closePhotoCap(stopStream) {
+  cancelAnimationFrame(_pcAnimFrame); _pcAnimFrame = null;
+  if (stopStream && _pcStream) {
+    _pcStream.getTracks().forEach(t => t.stop());
+    _pcStream = null;
+  }
+  document.getElementById('photoCap')?.remove();
+}
+
+// ── CORE DRUG PHOTO PROCESSING (shared by camera + file input) ────
+async function _processDrugPhoto(input, fromCam = false) {
+  const t0 = Date.now();
+  try {
+    const data = await analyzeWithGemini(input);
+    if (!data || (!data.name && !data.expiry && !data.lot)) {
+      showToast('⚠ AI อ่านไม่พบข้อมูล — ถ่ายด้านที่มีชื่อยา ไม่มีแสงสะท้อน', '#ff9f43');
+      return;
+    }
+    const exp = data.expiry ? new Date(data.expiry) : null;
+    const mfd = data.mfd    ? new Date(data.mfd)    : null;
+    const byGtin = data.gtin ? S.items.find(i => i.gtin === data.gtin || i.barcode === data.gtin) : null;
+    const byName = !byGtin && data.name ? S.items.find(i => i.name?.toLowerCase() === data.name?.toLowerCase()) : null;
+    const existing = byGtin || byName;
+    const result = {
+      name:      data.name     || existing?.name || '',
+      gen:       data.generic  || existing?.gen  || '',
+      strength:  data.strength || existing?.strength || '',
+      gtin:      data.gtin     || existing?.gtin || '',
+      barcode:   data.gtin     || existing?.gtin || '',
+      lot:       data.lot || '',
+      exp, mfd,
+      qty:       1,
+      dest:      S.scanDest,
+      highAlert: existing?.highAlert || false,
+      lasa:      existing?.lasa      || false,
+      cold:      existing?.cold      || false,
+      _fromScan: true, _fromAI: true,
+      isNew:        !existing && !data.name,
+      needsExpiry:  !exp || !data.lot,
+      _missingName: !data.name && !!(data.lot || data.expiry),
+    };
+    S.scanResult = result;
+    S.scanState = 'detected';
+    S.aiConf = 99;
+    handoffWrite(result, itemStatus(result.needsExpiry ? { ...result, exp: new Date(Date.now() + 365*86400000) } : result));
+    bumpStreak(); detectStress();
+    vibrate([8, 40, 12]);
+
+    const gotFields = [data.name, data.lot, data.expiry, data.mfd].filter(Boolean);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    if (gotFields.length >= 3) {
+      showToast(`✅ AI อ่านได้ ${gotFields.length} ช่อง · ${elapsed}s`, '#2ee6a6', 2200);
+    } else {
+      showToast(`🤖 AI อ่านได้ ${gotFields.length} ช่อง — กรอกส่วนที่เหลือ`, '#ff9f43');
+    }
+
+    // If in-app camera is open and rapid mode, close cam now (we have result)
+    if (fromCam && !S.rapidMode) closePhotoCap(true);
+
+    updateTabBody();
+    requestAnimationFrame(() => {
+      document.querySelector('.scan-result-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setTimeout(() => {
+        if (result.needsExpiry) { document.getElementById('ocrCaptureBtn')?.focus(); return; }
+        (document.getElementById('newDrugName') || document.getElementById('ean13Expiry'))?.focus();
+      }, 80);
+      if (!result.needsExpiry && result.name) setTimeout(() => _startAutoSave(2), 400);
+    });
+  } catch(e) {
+    console.warn('Photo scan error:', e);
+    const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
+    showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
+  }
+}
+
 async function handleNamePhoto(file) {
   if (!file) return;
   const btn = document.getElementById('namePhotoBtn');
@@ -1670,95 +1995,22 @@ async function handleNamePhoto(file) {
 
 const HERO_BTN_DEFAULT_HTML = `<div class="hero-photo-icon-wrap"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><div class="hero-photo-text"><div class="hero-photo-title">ถ่ายภาพฉลากยา</div><div class="hero-photo-sub">AI อ่าน ชื่อยา · EXP · LOT · วันผลิต ครบในภาพเดียว</div></div><svg class="hero-photo-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`;
 
+// handlePhotoScan — called when photo comes from file input (gallery/system camera fallback)
 async function handlePhotoScan(file) {
   if (!file) return;
   const hasGemini = !!(S.settings.geminiKey || localStorage.getItem('geminiKey'));
-  if (!hasGemini) {
-    showToast('ตั้งค่า Gemini API Key ก่อน (แท็บ ⚙ ตั้งค่า)', '#ff9f43');
-    return;
-  }
+  if (!hasGemini) { showToast('ตั้งค่า Gemini API Key ก่อน (แท็บ ⚙ ตั้งค่า)', '#ff9f43'); return; }
   const btn = document.getElementById('photoScanBtn');
-
-  // Show instant photo preview in the hero button — gives immediate visual feedback
   const previewUrl = URL.createObjectURL(file);
   if (btn) {
-    btn.innerHTML = `<div class="hero-photo-icon-wrap" style="padding:0;overflow:hidden;border-radius:10px;width:52px;height:52px"><img src="${previewUrl}" style="width:100%;height:100%;object-fit:cover"></div><div class="hero-photo-text"><div class="hero-photo-title" style="display:flex;align-items:center;gap:7px"><span class="ai-spinner"></span>AI กำลังอ่านฉลาก...</div><div class="hero-photo-sub">กำลังบีบอัดและส่งวิเคราะห์</div></div>`;
-    btn.disabled = true;
-    btn.style.animation = 'none';
-    btn.style.opacity = '.88';
+    btn.innerHTML = `<div class="hero-photo-icon-wrap" style="padding:0;overflow:hidden;border-radius:10px;width:52px;height:52px"><img src="${previewUrl}" style="width:100%;height:100%;object-fit:cover"></div><div class="hero-photo-text"><div class="hero-photo-title" style="display:flex;align-items:center;gap:7px"><span class="ai-spinner"></span>AI กำลังอ่าน...</div><div class="hero-photo-sub">กำลังบีบอัดและวิเคราะห์</div></div>`;
+    btn.disabled = true; btn.style.animation = 'none'; btn.style.opacity = '.88';
   }
-
-  const t0 = Date.now();
   try {
-    const data = await analyzeWithGemini(file);
-    URL.revokeObjectURL(previewUrl);
-    if (!data || (!data.name && !data.expiry && !data.lot)) {
-      showToast('⚠ AI อ่านไม่พบข้อมูล — ถ่ายด้านที่มีชื่อยาให้ชัด ไม่มีแสงสะท้อน', '#ff9f43');
-      return;
-    }
-    const exp = data.expiry ? new Date(data.expiry) : null;
-    const mfd = data.mfd ? new Date(data.mfd) : null;
-    const byGtin = data.gtin ? S.items.find(i => i.gtin === data.gtin || i.barcode === data.gtin) : null;
-    const byName = !byGtin && data.name ? S.items.find(i => i.name?.toLowerCase() === data.name?.toLowerCase()) : null;
-    const existing = byGtin || byName;
-    const result = {
-      name:      data.name || existing?.name || '',
-      gen:       data.generic || existing?.gen || '',
-      strength:  data.strength || existing?.strength || '',
-      gtin:      data.gtin || existing?.gtin || '',
-      barcode:   data.gtin || existing?.gtin || '',
-      lot:       data.lot || '',
-      exp, mfd,
-      qty:       1,
-      dest:      S.scanDest,
-      highAlert: existing?.highAlert || false,
-      lasa:      existing?.lasa || false,
-      cold:      existing?.cold || false,
-      _fromScan: true, _fromAI: true,
-      isNew:        !existing && !data.name,
-      needsExpiry:  !exp || !data.lot,
-      _missingName: !data.name && !!(data.lot || data.expiry),
-    };
-    S.scanResult = result;
-    S.scanState = 'detected';
-    S.aiConf = 99;
-    const _stResult = result.needsExpiry ? { ...result, exp: new Date(Date.now() + 365*86400000) } : result;
-    handoffWrite(result, itemStatus(_stResult));
-    bumpStreak(); detectStress();
-    vibrate([8,40,12]);
-
-    const gotFields = [data.name, data.lot, data.expiry, data.mfd].filter(Boolean);
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    if (gotFields.length >= 3) {
-      showToast(`✅ AI อ่านได้ ${gotFields.length} ช่อง (${elapsed}s) — บันทึกอัตโนมัติ`, '#2ee6a6');
-    } else {
-      showToast(`🤖 AI อ่านได้ ${gotFields.length} ช่อง — กรอกส่วนที่เหลือ`, '#ff9f43');
-    }
-    updateTabBody();
-    requestAnimationFrame(() => {
-      document.querySelector('.scan-result-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      setTimeout(() => {
-        if (result.needsExpiry) {
-          const ocrBtn = document.getElementById('ocrCaptureBtn');
-          if (ocrBtn) { ocrBtn.focus(); return; }
-        }
-        const first = document.getElementById('newDrugName') || document.getElementById('ean13Expiry');
-        if (first) first.focus();
-      }, 80);
-      if (!result.needsExpiry && result.name) setTimeout(() => _startAutoSave(2), 400);
-    });
-  } catch(e) {
-    URL.revokeObjectURL(previewUrl);
-    console.warn('Photo scan error:', e);
-    const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
-    showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
+    await _processDrugPhoto(file, false);
   } finally {
-    if (btn) {
-      btn.innerHTML = HERO_BTN_DEFAULT_HTML;
-      btn.disabled = false;
-      btn.style.animation = '';
-      btn.style.opacity = '';
-    }
+    URL.revokeObjectURL(previewUrl);
+    if (btn) { btn.innerHTML = HERO_BTN_DEFAULT_HTML; btn.disabled = false; btn.style.animation = ''; btn.style.opacity = ''; }
   }
 }
 
@@ -2673,12 +2925,18 @@ function acceptScan() {
   S.scanResult = null; S.scanState = 'idle';
   updateTabBody();
   saveToFirestore(S.scanHistory[0]);
-  // Rapid mode: auto-trigger camera for next drug
+  // Rapid mode: re-open in-app camera immediately for next drug
   if (S.rapidMode && wasFromAI) {
     setTimeout(() => {
-      const photoInput = document.getElementById('photoScanInput');
-      if (photoInput) photoInput.click();
-    }, 600);
+      if (_pcStream) {
+        // Camera stream still warm — just re-open overlay
+        openPhotoCap();
+      } else if (navigator.mediaDevices?.getUserMedia) {
+        openPhotoCap();
+      } else {
+        document.getElementById('photoScanInput')?.click();
+      }
+    }, 500);
   }
 }
 
