@@ -21,10 +21,10 @@ const S = {
   autoCapture: false,
   drugCache: JSON.parse(localStorage.getItem('_drugCache') || '{}'),
   stockFilter: 'all', stockSort: 'exp', stockSearch: '',
-  theme: localStorage.getItem('theme') || 'dark',
+  theme: localStorage.getItem('theme') || 'light',
   settings: { threshRed: 30, threshOrange: 60, threshYellow: 90, soundOn: true, geminiKey: '' },
   users: [
-    { id: 'u1', name: 'ภก.อนัส มะยีแต', en: 'เภสัชกร', role: 'Admin', color: '#009E9E', pin: '0000' },
+    { id: 'u1', name: 'ภก.อนัส มะยีแต', en: 'เภสัชกร', role: 'Admin', color: '#009CA6', pin: '0000' },
   ],
   auditLog: [],
   offlineMode: !navigator.onLine,
@@ -533,14 +533,14 @@ function renderLockProfiles() {
             <div class="lock-logo-fallback" style="display:none">
               <div style="text-align:center">
                 <div style="font-size:36px">🏥</div>
-                <div style="font-size:13px;font-weight:800;color:#009E9E;margin-top:4px">รพ.กรงปินัง</div>
+                <div style="font-size:13px;font-weight:800;color:#009CA6;margin-top:4px">รพ.กรงปินัง</div>
               </div>
             </div>
           </div>
           <div class="lock-system-label">
-            <div class="lock-system-line" style="background:linear-gradient(90deg,transparent,rgba(0,158,158,.4))"></div>
+            <div class="lock-system-line" style="background:linear-gradient(90deg,transparent,rgba(0,156,166,.4))"></div>
             <div class="lock-system-text">DRUG SAFETY SYSTEM</div>
-            <div class="lock-system-line" style="background:linear-gradient(90deg,rgba(0,158,158,.4),transparent)"></div>
+            <div class="lock-system-line" style="background:linear-gradient(90deg,rgba(0,156,166,.4),transparent)"></div>
           </div>
           <div class="lock-title-wrap">
             <div class="lock-title">ระบบเฝ้าระวังความปลอดภัย</div>
@@ -551,9 +551,9 @@ function renderLockProfiles() {
 
 
         <div class="lock-divider">
-          <div class="lock-divider-line" style="background:linear-gradient(90deg,transparent,rgba(0,158,158,.35))"></div>
+          <div class="lock-divider-line" style="background:linear-gradient(90deg,transparent,rgba(0,156,166,.35))"></div>
           <div class="lock-divider-text">บัญชีผู้เข้าใช้งาน</div>
-          <div class="lock-divider-line" style="background:linear-gradient(90deg,rgba(0,158,158,.35),transparent)"></div>
+          <div class="lock-divider-line" style="background:linear-gradient(90deg,rgba(0,156,166,.35),transparent)"></div>
         </div>
 
         <div class="profile-grid">${profiles}</div>
@@ -627,8 +627,8 @@ function renderPinScreen() {
   const dots = [0,1,2,3].map(i => {
     const filled = i < S.pin.length;
     const isErr = S.pinErr;
-    const bg = filled ? (isErr ? '#ff4d5e' : u.color) : 'transparent';
-    const border = filled ? (isErr ? '#ff4d5e' : u.color) : 'rgba(255,255,255,.3)';
+    const bg = filled ? (isErr ? 'var(--danger)' : u.color) : 'transparent';
+    const border = filled ? (isErr ? 'var(--danger)' : u.color) : 'var(--ink3)';
     const glow = filled && !isErr ? `0 0 18px ${u.color}cc,0 0 6px ${u.color}` : 'none';
     const scale = filled ? 'scale(1.15)' : 'scale(1)';
     const anim = filled ? 'pinFill .2s ease' : 'none';
@@ -808,7 +808,7 @@ function renderScanTab() {
   const scanning = detecting || lockon || decoding;
 
   /* corner colour by phase */
-  const cornerC = detected ? '#2ee6a6' : lockon ? '#2ee6a6' : decoding ? '#38bdf8' : '#009E9E';
+  const cornerC = detected ? '#2ee6a6' : lockon ? '#2ee6a6' : decoding ? '#38bdf8' : '#009CA6';
   const cornerW = lockon || decoding || detected ? '28px' : '36px';
   const corners = [
     { t:'0', l:'0', bt:'border-top:3px solid '+cornerC, bl:'border-left:3px solid '+cornerC, r:'borderTopLeftRadius' },
@@ -826,7 +826,7 @@ function renderScanTab() {
   const confPct = decoding ? S.aiConf : lockon ? 60 : detecting ? 20 : detected ? 99 : 0;
   const circumference = 201; // 2π×32
   const dashOffset = circumference - (circumference * confPct / 100);
-  const ringC = detected ? '#2ee6a6' : decoding ? '#38bdf8' : lockon ? '#2ee6a6' : '#009E9E';
+  const ringC = detected ? '#2ee6a6' : decoding ? '#38bdf8' : lockon ? '#2ee6a6' : '#009CA6';
   const confRing = `
     <div class="ai-conf-wrap">
       <svg class="ai-conf-svg" width="52" height="52" viewBox="0 0 52 52">
@@ -840,7 +840,7 @@ function renderScanTab() {
   /* phase status badge */
   const phaseInfo = {
     idle:      { label:'เล็งกล้องที่บาร์โค้ด', bg:'rgba(0,0,0,.5)', border:'rgba(255,255,255,.15)', c:'rgba(255,255,255,.8)' },
-    detecting: { label:'🔍 AI กำลังค้นหา…',    bg:'rgba(0,158,158,.25)', border:'rgba(0,158,158,.5)', c:'#009E9E' },
+    detecting: { label:'🔍 AI กำลังค้นหา…',    bg:'rgba(0,156,166,.25)', border:'rgba(0,156,166,.5)', c:'#009CA6' },
     lockon:    { label:'🎯 ล็อคเป้าหมาย…',       bg:'rgba(46,230,166,.2)', border:'rgba(46,230,166,.5)', c:'#2ee6a6' },
     decoding:  { label:'⚡ GS1 ถอดรหัส…',        bg:'rgba(56,189,248,.2)', border:'rgba(56,189,248,.5)', c:'#38bdf8' },
     detected:  { label:'✓ พบข้อมูล!',            bg:'rgba(46,230,166,.2)', border:'#2ee6a6', c:'#2ee6a6' },
@@ -857,7 +857,7 @@ function renderScanTab() {
   const statsHTML = `
     <div class="scan-stats-bar">
       <div class="scan-stat" style="animation-delay:.05s">
-        <div class="scan-stat-val" style="color:#009E9E">${S.items.length}</div>
+        <div class="scan-stat-val" style="color:#009CA6">${S.items.length}</div>
         <div class="scan-stat-label">รายการทั้งหมด</div>
       </div>
       <div class="scan-stat" style="animation-delay:.1s">
@@ -887,7 +887,7 @@ function renderScanTab() {
       <div style="font-size:11px;font-weight:700;color:var(--ink3);letter-spacing:.8px;margin-bottom:8px">ประวัติสแกนล่าสุด</div>
       <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px">
         ${S.scanHistory.slice(0,6).map((it,idx) => {
-          const dc = it.dest === 'SUBSTOCK' ? '#7c6cff' : '#009E9E';
+          const dc = it.dest === 'SUBSTOCK' ? '#7c6cff' : '#009CA6';
           const st = itemStatus({exp:it.exp});
           return `<div class="history-chip" style="border:1px solid ${dc}33;background:${dc}0e;animation-delay:${idx*.05}s">
             <div style="font-size:11.5px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.name.split(' ').slice(0,2).join(' ')}</div>
@@ -959,7 +959,7 @@ function renderScanTab() {
       ${S.cameraActive ? `<div class="live-cam-indicator"><div class="live-cam-dot"></div>LIVE · ZXing AI</div>` : ''}
       <div id="camContainer" style="position:absolute;inset:0;display:${S.cameraActive?'block':'flex'};flex-direction:column;align-items:center;justify-content:center;gap:8px">
         ${!S.cameraActive ? `
-          <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="rgba(0,158,158,.4)" stroke-width="1" style="margin-top:8px">
+          <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="rgba(0,156,166,.4)" stroke-width="1" style="margin-top:8px">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
             <circle cx="12" cy="13" r="4"/>
           </svg>` : ''}
@@ -999,7 +999,7 @@ function renderScanTab() {
 function renderScanResult(r) {
   const needsExpiry = !!r.needsExpiry;
   const exp = needsExpiry ? null : (r.exp || null);
-  const sC = exp ? itemStatus({ exp }) : { c:'#009E9E', label:'รอระบุ', key:'GREEN' };
+  const sC = exp ? itemStatus({ exp }) : { c:'#009CA6', label:'รอระบุ', key:'GREEN' };
   const dl  = exp ? daysLeft(exp) : 999;
   const isExpired = dl < 0;
 
@@ -1023,10 +1023,10 @@ function renderScanResult(r) {
   const inpDate = `background:var(--glass);border:1px solid var(--glassb);border-radius:10px;padding:8px 6px;font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--ink);width:100%;box-sizing:border-box`;
 
   return `
-    <div class="scan-result-card" style="border-color:${needsExpiry?'#ff9f4355':'#009e9e55'}">
+    <div class="scan-result-card" style="border-color:${needsExpiry?'#ff9f4355':'#009ca655'}">
       <!-- Barcode row -->
       <div class="ai-meta-row">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#009E9E" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 4v5M12 4v5M17 4v5"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#009CA6" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20M7 4v5M12 4v5M17 4v5"/></svg>
         <span class="ai-meta-label">รูปแบบ</span>
         <span class="ai-meta-val">${S.scanFormat}</span>
         ${r.barcode || r.gtin ? `<span class="gs1-gtin" style="margin-left:auto;font-size:10px">${(r.gtin||r.barcode).slice(0,16)}</span>` : ''}
@@ -1339,7 +1339,7 @@ function renderDashTab() {
   const lowStock = S.items.filter(it => it.minStock > 0 && it.qty <= it.minStock);
 
   const kpiData = [
-    { icon:'💊', bg:'rgba(0,158,158,.15)', val:all.length, label:'ยาทั้งหมด', sub:`${S.dept} · รายการทั้งหมด`, trendC:'#009E9E' },
+    { icon:'💊', bg:'rgba(0,156,166,.15)', val:all.length, label:'ยาทั้งหมด', sub:`${S.dept} · รายการทั้งหมด`, trendC:'#009CA6' },
     { icon:'🔴', bg:'rgba(255,77,94,.15)', val:counts.RED, label:'ห้ามใช้/หมดอายุ', sub: counts.RED>0 ? 'ต้องดำเนินการทันที':'ไม่มีรายการ', trendC: counts.RED>0?'#ff4d5e':'#2ee6a6' },
     { icon:'🟠', bg:'rgba(255,159,67,.15)', val:counts.ORANGE, label:'คืนบริษัท', sub:`มูลค่าเสี่ยง ~${atRiskCost.toLocaleString('th-TH')}฿`, trendC:'#ff9f43' },
     { icon:'📊', bg:'rgba(157,140,255,.15)', val:todayScans, label:'สแกนวันนี้', sub:`สต๊อกต่ำ: ${lowStock.length} รายการ`, trendC:'#9d8cff' },
@@ -1434,13 +1434,13 @@ function renderCfgTab() {
         <span class="thresh-label" style="color:${color}">● ${label}</span>
         <span class="thresh-val">${s[key]||30} วัน</span>
       </div>
-      <input class="thresh-slider" type="range" min="7" max="180" value="${s[key]||30}" data-thresh="${key}" style="accent-color:${color}">
+      <input class="thresh-slider" type="range" min="7" max="180" value="${s[key]||30}" data-thresh="${key}" style="accent-color:${color};color:${color}">
     </div>`;
 
   const auditHTML = S.auditLog.length === 0
     ? `<div class="audit-empty">ยังไม่มีบันทึก — บันทึกเริ่มต้นเมื่อสแกน/ตัดยอด/โอน</div>`
     : S.auditLog.slice(0,20).map(l => {
-        const c = {'รับเข้าสต๊อก':'#009E9E','โอนขึ้นจุดบริการ':'#2ee6a6','ลบยา':'#ff4d5e'}[l.action]||'#9d8cff';
+        const c = {'รับเข้าสต๊อก':'#009CA6','โอนขึ้นจุดบริการ':'#2ee6a6','ลบยา':'#ff4d5e'}[l.action]||'#9d8cff';
         return `<div class="audit-entry">
           <div class="audit-dot" style="background:${c}"></div>
           <div style="flex:1;min-width:0">
@@ -1485,7 +1485,7 @@ function renderCfgTab() {
           <div class="settings-row-label">เสียงสังเคราะห์ + TTS</div>
           <div class="settings-row-sub">ปิดเมื่ออยู่ในพื้นที่เงียบ</div>
         </div>
-        <button class="settings-toggle" id="soundToggle" style="background:${s.soundOn?'#009E9E':'rgba(150,150,160,.35)'}">
+        <button class="settings-toggle" id="soundToggle" style="background:${s.soundOn?'#009CA6':'rgba(150,150,160,.35)'}">
           <span class="settings-toggle-thumb" style="left:${s.soundOn?'23px':'3px'}"></span>
         </button>
       </div>
@@ -1793,7 +1793,7 @@ function bindScanTab() {
       vibrate(5); S.scanFormat = chip.dataset.fmt;
       document.querySelectorAll('.scan-format-chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
-      showToast(`📡 ${S.scanFormat}`, '#009E9E');
+      showToast(`📡 ${S.scanFormat}`, '#009CA6');
     });
   });
 
@@ -2669,7 +2669,7 @@ function bindCfgTab() {
   if (deptSel) deptSel.addEventListener('change', () => {
     S.dept = deptSel.value;
     try { localStorage.setItem('dept', S.dept); } catch(e) {}
-    showToast(`✓ เปลี่ยนแผนกเป็น ${S.dept}`, '#009E9E');
+    showToast(`✓ เปลี่ยนแผนกเป็น ${S.dept}`, '#009CA6');
   });
 
   // User management
@@ -2683,7 +2683,7 @@ function bindCfgTab() {
 }
 
 // ── USER FORM OVERLAY ─────────────────────────────────
-const USER_COLORS = ['#009E9E','#6366f1','#0ea5e9','#8b5cf6','#f43f5e','#f59e0b','#10b981','#ef4444','#0891b2','#7c3aed'];
+const USER_COLORS = ['#009CA6','#6366f1','#0ea5e9','#8b5cf6','#f43f5e','#f59e0b','#10b981','#ef4444','#0891b2','#7c3aed'];
 
 function showUserForm(user) {
   const isEdit = !!user;
@@ -2733,7 +2733,7 @@ function showUserForm(user) {
         <div style="display:flex;gap:10px;margin-top:18px">
           <button id="uformCancel" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ยกเลิก</button>
           ${isEdit && S.users.length > 1 ? `<button id="uformDelete" style="padding:13px 16px;border-radius:14px;border:none;background:rgba(255,77,94,.15);color:#ff4d5e;font-size:14px;font-weight:700;cursor:pointer;font-family:'Sarabun',sans-serif">🗑</button>` : ''}
-          <button id="uformSave" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009E9E,#007070)">${isEdit ? '✓ บันทึก' : '➕ เพิ่ม'}</button>
+          <button id="uformSave" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009CA6,#007680)">${isEdit ? '✓ บันทึก' : '➕ เพิ่ม'}</button>
         </div>
       </div>
     </div>`;
@@ -3037,8 +3037,8 @@ function updatePinDots() {
   dots.innerHTML = [0,1,2,3].map(i => {
     const filled = i < S.pin.length;
     const isErr = S.pinErr;
-    const bg = filled ? (isErr ? '#ff4d5e' : u.color) : 'transparent';
-    const border = filled ? (isErr ? '#ff4d5e' : u.color) : 'rgba(255,255,255,.3)';
+    const bg = filled ? (isErr ? 'var(--danger)' : u.color) : 'transparent';
+    const border = filled ? (isErr ? 'var(--danger)' : u.color) : 'var(--ink3)';
     const glow = filled && !isErr ? `0 0 18px ${u.color}cc,0 0 6px ${u.color}` : 'none';
     const anim = filled ? 'pinFill .2s ease' : 'none';
     return `<div style="width:18px;height:18px;border-radius:50%;background:${bg};border:2px solid ${border};box-shadow:${glow};animation:${anim};transform:${filled?'scale(1.15)':'scale(1)'};transition:all .18s"></div>`;
@@ -3442,7 +3442,7 @@ function updateScanViewport() {
   };
   const colors = {
     idle:{bg:'rgba(0,0,0,.5)',b:'rgba(255,255,255,.15)',c:'rgba(255,255,255,.8)'},
-    detecting:{bg:'rgba(0,158,158,.25)',b:'rgba(0,158,158,.5)',c:'#009E9E'},
+    detecting:{bg:'rgba(0,156,166,.25)',b:'rgba(0,156,166,.5)',c:'#009CA6'},
     lockon:{bg:'rgba(46,230,166,.2)',b:'rgba(46,230,166,.5)',c:'#2ee6a6'},
     decoding:{bg:'rgba(56,189,248,.2)',b:'rgba(56,189,248,.5)',c:'#38bdf8'},
     detected:{bg:'rgba(46,230,166,.2)',b:'#2ee6a6',c:'#2ee6a6'},
@@ -3667,7 +3667,7 @@ function showDrugSheet(it) {
           ${(st.key === 'RED' || S.user?.role === 'Admin') ? `<button class="sheet-action-btn sheet-action-disposal" id="disposalItemBtn">🗑 ทำลายยา</button>` : ''}
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="sheet-action-btn" style="flex:1;background:rgba(0,158,158,.12);color:#009E9E;border-color:rgba(0,158,158,.25)" id="fdaLookupBtn">🔍 ค้นหาใน อย.</button>
+          <button class="sheet-action-btn" style="flex:1;background:rgba(0,156,166,.12);color:#009CA6;border-color:rgba(0,156,166,.25)" id="fdaLookupBtn">🔍 ค้นหาใน อย.</button>
           <button class="sheet-action-btn" style="flex:1;background:rgba(255,77,94,.12);color:#ff4d5e;border-color:rgba(255,77,94,.25)" id="deleteItemBtn">🗑 ลบออก</button>
         </div>
         <button class="form-submit" style="background:var(--glass);color:var(--ink);border:1px solid var(--glassb);margin-top:8px" id="closeSheetBtn">ปิด</button>
@@ -4066,7 +4066,7 @@ function toggleFocusMode() {
 // ── COMMAND PALETTE ────────────────────────────────────
 let _cmdQuery = '';
 const CMD_ACTIONS = [
-  { id:'scan',   label:'สแกนยา',              sub:'เปิดหน้ากล้องสแกนบาร์โค้ด',      icon:'⊹', color:'#009E9E', act:() => { S.tab='scan';   renderAppBody(); updateNavTabs(); } },
+  { id:'scan',   label:'สแกนยา',              sub:'เปิดหน้ากล้องสแกนบาร์โค้ด',      icon:'⊹', color:'#009CA6', act:() => { S.tab='scan';   renderAppBody(); updateNavTabs(); } },
   { id:'stock',  label:'คลังยา',              sub:'ดูรายการยาและสต็อกทั้งหมด',       icon:'▤', color:'#6366f1', act:() => { S.tab='stock';  renderAppBody(); updateNavTabs(); } },
   { id:'dash',   label:'รายงาน & KPI',         sub:'กราฟสรุปและสถิติยา',             icon:'◳', color:'#0ea5e9', act:() => { S.tab='dash';   renderAppBody(); updateNavTabs(); } },
   { id:'cfg',    label:'ตั้งค่าระบบ',           sub:'เกณฑ์แจ้งเตือน เสียง ธีม',       icon:'⚙', color:'#8b5cf6', act:() => { S.tab='cfg';    renderAppBody(); updateNavTabs(); } },
@@ -4562,8 +4562,8 @@ function _showHighAlertDoubleCheck(onConfirmed) {
 
     const pinDots = [0,1,2,3].map(i => {
       const filled = i < witnessPin.length;
-      const bg = filled ? (witnessErr ? '#ff4d5e' : '#009E9E') : 'transparent';
-      const border = filled ? (witnessErr ? '#ff4d5e' : '#009E9E') : 'rgba(255,255,255,.25)';
+      const bg = filled ? (witnessErr ? 'var(--danger)' : 'var(--brand)') : 'transparent';
+      const border = filled ? (witnessErr ? 'var(--danger)' : 'var(--brand)') : 'var(--ink3)';
       return `<div style="width:16px;height:16px;border-radius:50%;background:${bg};border:2px solid ${border};transition:all .15s;transform:${filled?'scale(1.12)':'scale(1)'}"></div>`;
     }).join('');
 
@@ -4575,11 +4575,11 @@ function _showHighAlertDoubleCheck(onConfirmed) {
 
     const html = `
       <div class="overlay" id="haDoubleCheckOverlay" style="z-index:9000">
-        <div id="confirm-box" style="border:2px solid #ff4d5e;max-width:320px;padding:24px 20px 20px">
+        <div id="confirm-box" style="border:2px solid var(--danger);max-width:320px;padding:24px 20px 20px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
             <span style="font-size:28px;line-height:1">⬢</span>
             <div>
-              <div style="font-size:15px;font-weight:700;color:#ff4d5e">HIGH-ALERT — ยืนยัน 2 คน</div>
+              <div style="font-size:15px;font-weight:700;color:var(--danger)">HIGH-ALERT — ยืนยัน 2 คน</div>
               <div style="font-size:12px;color:var(--ink2);margin-top:2px">${r?.name || ''}</div>
             </div>
           </div>
@@ -4602,7 +4602,7 @@ function _showHighAlertDoubleCheck(onConfirmed) {
             <div style="margin-bottom:8px">
               <div style="font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">PIN ของผู้ยืนยัน</div>
               <div style="display:flex;gap:14px;justify-content:center;margin-bottom:${witnessErr?'4px':'12px'}" id="haPinDots">${pinDots}</div>
-              ${witnessErr ? `<div style="text-align:center;font-size:12px;color:#ff4d5e;margin-bottom:8px">PIN ไม่ถูกต้อง</div>` : ''}
+              ${witnessErr ? `<div style="text-align:center;font-size:12px;color:var(--danger);margin-bottom:8px">PIN ไม่ถูกต้อง</div>` : ''}
             </div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px" id="haPinKeypad">${keyBtns}</div>
             <button id="haCancel" style="width:100%;padding:13px;border-radius:13px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ยกเลิก</button>
@@ -4868,8 +4868,8 @@ function showDispenseModal(item) {
       <div id="sheet-box">
         <div id="sheet-handle"></div>
         <div class="sheet-title">💊 จ่ายยา</div>
-        <div style="padding:12px;border-radius:13px;background:rgba(0,158,158,.1);border:1px solid rgba(0,158,158,.3);margin-bottom:16px">
-          <div style="font-weight:700;color:#009E9E">${item.name}</div>
+        <div style="padding:12px;border-radius:13px;background:rgba(0,156,166,.1);border:1px solid rgba(0,156,166,.3);margin-bottom:16px">
+          <div style="font-weight:700;color:#009CA6">${item.name}</div>
           <div style="font-size:12px;color:var(--ink2);margin-top:2px">Lot ${item.lot} · คงเหลือ ${item.qty} หน่วย</div>
         </div>
         <div class="form-field">
@@ -4947,7 +4947,7 @@ function showBatchSummary() {
         <div style="font-size:34px;text-align:center">📋</div>
         <div style="font-size:17px;font-weight:700;text-align:center;margin-top:8px;color:var(--ink)">สรุปการสแกนชุดนี้</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px">
-          <div class="batch-kpi-cell" style="--bc:#009E9E"><div class="batch-kpi-val" style="color:#009E9E">${items.length}</div><div class="batch-kpi-lbl">รับเข้าทั้งหมด</div></div>
+          <div class="batch-kpi-cell" style="--bc:#009CA6"><div class="batch-kpi-val" style="color:#009CA6">${items.length}</div><div class="batch-kpi-lbl">รับเข้าทั้งหมด</div></div>
           <div class="batch-kpi-cell" style="--bc:#ff4d5e"><div class="batch-kpi-val" style="color:#ff4d5e">${nearExpiry.length}</div><div class="batch-kpi-lbl">ใกล้/หมดอายุ</div></div>
           <div class="batch-kpi-cell" style="--bc:#ff9f43"><div class="batch-kpi-val" style="color:#ff9f43">${dupCount}</div><div class="batch-kpi-lbl">Lot ซ้ำ</div></div>
           <div class="batch-kpi-cell" style="--bc:#9d8cff"><div class="batch-kpi-val" style="color:#9d8cff">${mins}</div><div class="batch-kpi-lbl">นาที</div></div>
@@ -5043,7 +5043,7 @@ function lookupThaiFDA(name, gtin) {
   document.getElementById('fdaOverlay')?.remove();
   const html = `
     <div class="overlay" id="fdaOverlay">
-      <div id="confirm-box" style="border:1px solid rgba(0,158,158,.4)">
+      <div id="confirm-box" style="border:1px solid rgba(0,156,166,.4)">
         <div style="font-size:34px;text-align:center">🔍</div>
         <div style="font-size:17px;font-weight:700;text-align:center;margin-top:8px;color:var(--ink)">ค้นหาในฐานข้อมูล อย.</div>
         <div style="font-size:13px;color:var(--ink2);text-align:center;margin-top:8px;line-height:1.6">
@@ -5052,7 +5052,7 @@ function lookupThaiFDA(name, gtin) {
         </div>
         <div style="display:flex;gap:10px;margin-top:16px">
           <button id="fdaClose" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ปิด</button>
-          <button id="fdaOpen" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009E9E,#007070)">🌐 เปิดเว็บ อย.</button>
+          <button id="fdaOpen" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009CA6,#007680)">🌐 เปิดเว็บ อย.</button>
         </div>
       </div>
     </div>`;
