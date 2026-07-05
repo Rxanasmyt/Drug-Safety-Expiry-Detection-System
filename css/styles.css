@@ -1355,7 +1355,17 @@ body {
   border: 1px dashed rgba(0,158,158,.4);
   background: rgba(0,158,158,.06); cursor: pointer;
   color: #009E9E; font-weight: 700; font-size: 13.5px;
-  font-family: 'Sarabun', sans-serif;
+  font-family: 'Sarabun', sans-serif; transition: all .2s;
+}
+.add-user-btn:hover { background: rgba(0,158,158,.12); }
+.uform-color-swatch {
+  width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+  border: 3px solid transparent; transition: all .15s;
+  box-sizing: border-box;
+}
+.uform-color-swatch.selected {
+  border-color: #fff; box-shadow: 0 0 0 2px currentColor, 0 0 12px -2px currentColor;
+  transform: scale(1.15);
 }
 
 /* Audit log */

@@ -2573,6 +2573,140 @@ function bindCfgTab() {
     try { localStorage.setItem('dept', S.dept); } catch(e) {}
     showToast(`✓ เปลี่ยนแผนกเป็น ${S.dept}`, '#009E9E');
   });
+
+  // User management
+  document.getElementById('addUserBtn')?.addEventListener('click', () => showUserForm(null));
+  document.querySelectorAll('.user-edit-btn[data-edituid]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const u = S.users.find(x => x.id === btn.dataset.edituid);
+      if (u) showUserForm(u);
+    });
+  });
+}
+
+// ── USER FORM OVERLAY ─────────────────────────────────
+const USER_COLORS = ['#009E9E','#6366f1','#0ea5e9','#8b5cf6','#f43f5e','#f59e0b','#10b981','#ef4444','#0891b2','#7c3aed'];
+
+function showUserForm(user) {
+  const isEdit = !!user;
+  const appScreen = document.getElementById('app-screen');
+  if (!appScreen) return;
+  document.getElementById('userFormOverlay')?.remove();
+
+  const colorPicker = USER_COLORS.map(c =>
+    `<div class="uform-color-swatch${user?.color===c||(!user&&c===USER_COLORS[0])?' selected':''}" data-color="${c}" style="background:${c}" tabindex="0" role="button" aria-label="${c}"></div>`
+  ).join('');
+
+  const html = `
+    <div class="overlay" id="userFormOverlay" style="z-index:1100">
+      <div id="confirm-box" style="max-width:360px;width:100%">
+        <div style="font-size:24px;text-align:center">${isEdit ? '✏️' : '➕'}</div>
+        <div style="font-size:17px;font-weight:700;text-align:center;margin-bottom:16px;color:var(--ink)">${isEdit ? 'แก้ไขบัญชีผู้ใช้' : 'เพิ่มบัญชีผู้ใช้งาน'}</div>
+
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <label style="font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.6px">ชื่อ-นามสกุล *</label>
+            <input id="uformName" type="text" value="${user?.name||''}" placeholder="ภก. / พยาบาล / เจ้าหน้าที่"
+              style="width:100%;margin-top:4px;padding:10px 12px;border-radius:12px;border:1px solid var(--glassb);background:var(--glass);color:var(--ink);font-size:14px;font-family:'Sarabun',sans-serif;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.6px">ตำแหน่ง</label>
+            <input id="uformRole" type="text" value="${user?.en||''}" placeholder="เภสัชกร / พยาบาล / เจ้าหน้าที่"
+              style="width:100%;margin-top:4px;padding:10px 12px;border-radius:12px;border:1px solid var(--glassb);background:var(--glass);color:var(--ink);font-size:14px;font-family:'Sarabun',sans-serif;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.6px">สิทธิ์ (Role)</label>
+            <select id="uformRoleType" style="width:100%;margin-top:4px;padding:10px 12px;border-radius:12px;border:1px solid var(--glassb);background:var(--glass);color:var(--ink);font-size:14px;font-family:'Sarabun',sans-serif;box-sizing:border-box;cursor:pointer">
+              <option value="Admin"${user?.role==='Admin'?' selected':''}>Admin — เข้าถึงทุกฟังก์ชัน</option>
+              <option value="User"${user?.role==='User'||!user?' selected':''}>User — เฉพาะสแกนและดูข้อมูล</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.6px">PIN (4-6 หลัก) *</label>
+            <input id="uformPin" type="password" inputmode="numeric" maxlength="6" value="${user?.pin||''}" placeholder="0000"
+              style="width:100%;margin-top:4px;padding:10px 12px;border-radius:12px;border:1px solid var(--glassb);background:var(--glass);color:var(--ink);font-size:18px;font-family:'JetBrains Mono',monospace;letter-spacing:4px;box-sizing:border-box">
+          </div>
+          <div>
+            <label style="font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.6px;display:block;margin-bottom:6px">สีประจำตัว</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap" id="uformColorRow">${colorPicker}</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:18px">
+          <button id="uformCancel" style="flex:1;padding:13px;border-radius:14px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ยกเลิก</button>
+          ${isEdit && S.users.length > 1 ? `<button id="uformDelete" style="padding:13px 16px;border-radius:14px;border:none;background:rgba(255,77,94,.15);color:#ff4d5e;font-size:14px;font-weight:700;cursor:pointer;font-family:'Sarabun',sans-serif">🗑</button>` : ''}
+          <button id="uformSave" style="flex:1.3;padding:13px;border-radius:14px;border:none;cursor:pointer;font-size:14px;font-weight:700;font-family:'Sarabun',sans-serif;color:#04140d;background:linear-gradient(135deg,#009E9E,#007070)">${isEdit ? '✓ บันทึก' : '➕ เพิ่ม'}</button>
+        </div>
+      </div>
+    </div>`;
+  appScreen.insertAdjacentHTML('beforeend', html);
+
+  // Color swatch selection
+  let selectedColor = user?.color || USER_COLORS[0];
+  document.querySelectorAll('.uform-color-swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      document.querySelectorAll('.uform-color-swatch').forEach(s => s.classList.remove('selected'));
+      sw.classList.add('selected');
+      selectedColor = sw.dataset.color;
+    });
+  });
+
+  function closeForm() { document.getElementById('userFormOverlay')?.remove(); }
+
+  document.getElementById('uformCancel').addEventListener('click', closeForm);
+  document.getElementById('userFormOverlay').addEventListener('click', e => {
+    if (e.target.id === 'userFormOverlay') closeForm();
+  });
+
+  document.getElementById('uformSave').addEventListener('click', () => {
+    const name = document.getElementById('uformName').value.trim();
+    const en   = document.getElementById('uformRole').value.trim();
+    const role = document.getElementById('uformRoleType').value;
+    const pin  = document.getElementById('uformPin').value.trim();
+
+    if (!name) {
+      document.getElementById('uformName').style.borderColor = '#ff4d5e';
+      showToast('⚠ กรุณาระบุชื่อ', '#ff4d5e');
+      return;
+    }
+    if (!pin || pin.length < 4 || !/^\d+$/.test(pin)) {
+      document.getElementById('uformPin').style.borderColor = '#ff4d5e';
+      showToast('⚠ PIN ต้องเป็นตัวเลข 4-6 หลัก', '#ff4d5e');
+      return;
+    }
+
+    if (isEdit) {
+      user.name = name; user.en = en; user.role = role; user.pin = pin; user.color = selectedColor;
+      addLog('แก้ไขบัญชีผู้ใช้', name);
+      showToast(`✓ อัปเดต ${name} แล้ว`, '#2ee6a6');
+    } else {
+      const newUser = {
+        id: 'u' + Date.now(),
+        name, en, role, pin,
+        color: selectedColor,
+      };
+      S.users.push(newUser);
+      addLog('เพิ่มบัญชีผู้ใช้', name);
+      showToast(`✓ เพิ่ม ${name} แล้ว`, '#2ee6a6');
+    }
+    _saveUsers();
+    closeForm();
+    updateTabBody();
+  });
+
+  document.getElementById('uformDelete')?.addEventListener('click', () => {
+    if (user.id === S.user?.id) { showToast('⚠ ไม่สามารถลบบัญชีที่กำลังใช้งาน', '#ff4d5e'); return; }
+    S.users = S.users.filter(u => u.id !== user.id);
+    addLog('ลบบัญชีผู้ใช้', user.name);
+    showToast(`✓ ลบ ${user.name} แล้ว`, '#ff9f43');
+    _saveUsers();
+    closeForm();
+    updateTabBody();
+  });
+}
+
+function _saveUsers() {
+  try { localStorage.setItem('_users', JSON.stringify(S.users)); } catch(e) {}
 }
 
 function bindSheetEvents() {
@@ -4642,6 +4776,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (savedLock > 0) S.autoLockMins = savedLock;
     const savedKey = localStorage.getItem('geminiKey');
     if (savedKey) S.settings.geminiKey = savedKey;
+  } catch(e) {}
+
+  // Restore saved user accounts
+  try {
+    const savedUsers = JSON.parse(localStorage.getItem('_users') || 'null');
+    if (Array.isArray(savedUsers) && savedUsers.length > 0) S.users = savedUsers;
   } catch(e) {}
 
   // Restore session if valid (8h window)
