@@ -43,6 +43,69 @@ const S = {
   stockDept: 'all',
 };
 
+// ── PIN LOCKOUT ────────────────────────────────────────
+// Persisted across page refreshes; keyed by user id
+const _pinAttempts = (() => {
+  try { return JSON.parse(localStorage.getItem('_pinAttempts') || '{}'); } catch(e) { return {}; }
+})();
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS   = 30 * 60 * 1000; // 30 minutes
+
+function _savePinAttempts() {
+  try { localStorage.setItem('_pinAttempts', JSON.stringify(_pinAttempts)); } catch(e) {}
+}
+
+function _getPinLockout(uid) {
+  const a = _pinAttempts[uid];
+  if (!a) return { locked: false, count: 0, attemptsLeft: PIN_MAX_ATTEMPTS };
+  const now = Date.now();
+  if (a.lockedUntil && now < a.lockedUntil) {
+    return { locked: true, count: a.count || 0, remainingSecs: Math.ceil((a.lockedUntil - now) / 1000) };
+  }
+  const count = a.count || 0;
+  return { locked: false, count, attemptsLeft: PIN_MAX_ATTEMPTS - count };
+}
+
+function _recordPinFail(uid, userName) {
+  if (!_pinAttempts[uid]) _pinAttempts[uid] = { count: 0 };
+  _pinAttempts[uid].count = (_pinAttempts[uid].count || 0) + 1;
+  const count = _pinAttempts[uid].count;
+  _addLoginLog('PIN ผิด', `${userName} — ครั้งที่ ${count}`);
+  let justLocked = false;
+  if (count >= PIN_MAX_ATTEMPTS) {
+    _pinAttempts[uid].lockedUntil = Date.now() + PIN_LOCKOUT_MS;
+    _pinAttempts[uid].count = 0;
+    justLocked = true;
+    _addLoginLog('ล็อคเข้าระบบ', `${userName} — PIN ผิด ${PIN_MAX_ATTEMPTS} ครั้ง ล็อค 30 นาที`);
+  }
+  _savePinAttempts();
+  return { count, justLocked, attemptsLeft: PIN_MAX_ATTEMPTS - count };
+}
+
+function _clearPinFail(uid) {
+  delete _pinAttempts[uid];
+  _savePinAttempts();
+}
+
+// addLog variant for pre-login events where S.user is not yet set
+function _addLoginLog(action, detail) {
+  const entry = {
+    id: 'l' + Date.now(),
+    ts: new Date(),
+    user: S.pendingUser?.name || S.user?.name || 'ระบบ',
+    role: S.pendingUser?.role || S.user?.role || '—',
+    action, detail,
+  };
+  S.auditLog.unshift(entry);
+  if (S.auditLog.length > 200) S.auditLog.splice(200);
+  if (typeof auditRef !== 'undefined') {
+    auditRef.add({
+      action, detail, user: entry.user, role: entry.role,
+      ts: firebase.firestore.FieldValue.serverTimestamp(),
+    }).catch(e => console.warn('LoginLog write:', e));
+  }
+}
+
 // ── SEED DATA ─────────────────────────────────────────
 // ข้อมูลจริงมาจาก Firestore เท่านั้น — ไม่มีข้อมูลทดลองหรือข้อมูลที่สร้างขึ้นเอง
 
@@ -522,9 +585,44 @@ function renderLockProfiles() {
 }
 
 // ── LOCK — PIN SCREEN ─────────────────────────────────
+let _pinLockCountdownT = null;
 function renderPinScreen() {
   const u = S.pendingUser;
   if (!u) return '';
+
+  // Show lockout screen if user is temporarily blocked
+  const lockout = _getPinLockout(u.id);
+  if (lockout.locked) {
+    const mins = Math.floor(lockout.remainingSecs / 60);
+    const secs = lockout.remainingSecs % 60;
+    clearTimeout(_pinLockCountdownT);
+    _pinLockCountdownT = setTimeout(() => {
+      if (S.loginStep === 'pin' && S.pendingUser?.id === u.id) renderScreen();
+    }, 1000);
+    return `
+      <div id="pin-screen">
+        <div class="pin-bg-grad" style="background:radial-gradient(ellipse 80% 60% at 50% 0%,#ff4d5e28 0%,transparent 65%)"></div>
+        <div class="pin-top-line" style="background:linear-gradient(90deg,transparent,#ff4d5e,transparent)"></div>
+        <button class="pin-back-btn" id="pinBack">‹</button>
+        <div class="pin-hero" style="gap:16px">
+          <div class="pin-avatar" style="background:linear-gradient(145deg,#ff4d5e,#c81e2e);box-shadow:0 16px 48px -10px #ff4d5ebb,0 0 0 4px #ff4d5e33,inset 0 2px 0 rgba(255,255,255,.3);width:84px;height:84px">
+            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.95)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="position:relative;z-index:1"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <div style="text-align:center">
+            <div class="pin-user-name">${u.name}</div>
+            <div class="pin-user-sub" style="color:#ff4d5e;font-weight:600">บัญชีถูกล็อคชั่วคราว</div>
+          </div>
+          <div style="text-align:center;padding:18px 24px;background:rgba(255,77,94,.1);border:1px solid rgba(255,77,94,.35);border-radius:16px;width:100%;max-width:280px">
+            <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;color:#ff4d5e;letter-spacing:2px">${mins}:${secs.toString().padStart(2,'0')}</div>
+            <div style="font-size:12px;color:var(--ink3);margin-top:4px">กรุณารอ — PIN ผิดเกิน ${PIN_MAX_ATTEMPTS} ครั้ง</div>
+          </div>
+          <div style="font-size:12px;color:var(--ink3);text-align:center;padding:0 20px;line-height:1.6">หากต้องการรีเซ็ต กรุณาติดต่อ Admin<br>หรือรอให้ครบเวลา</div>
+        </div>
+      </div>`;
+  }
+
+  const attemptsLeft = lockout.attemptsLeft;
+  const showAttemptsWarn = lockout.count > 0 && attemptsLeft <= 3;
   const keys = ['1','2','3','4','5','6','7','8','9','face','0','del'];
   const dots = [0,1,2,3].map(i => {
     const filled = i < S.pin.length;
@@ -558,11 +656,11 @@ function renderPinScreen() {
           <div class="pin-user-sub">${u.role} · โรงพยาบาลกรงปินัง</div>
         </div>
         <div class="pin-dots${S.pinErr ? ' error' : ''}" id="pinDots">${dots}</div>
-        ${S.pinErr ? `<div class="pin-error-msg">PIN ไม่ถูกต้อง — ลองอีกครั้ง</div>` : ''}
+        ${S.pinErr ? `<div class="pin-error-msg">PIN ไม่ถูกต้อง${showAttemptsWarn ? ` — เหลืออีก ${attemptsLeft} ครั้ง` : ' — ลองอีกครั้ง'}</div>` : ''}
       </div>
       <div class="pin-keypad">${keyBtns}</div>
       <div class="pin-hint">
-        <div class="pin-hint-text">ใส่ PIN 4 หลัก</div>
+        <div class="pin-hint-text">ใส่ PIN 4 หลัก${showAttemptsWarn ? ` <span style="color:#ff9f43;font-weight:600">(เหลืออีก ${attemptsLeft} ครั้ง)</span>` : ''}</div>
       </div>
     </div>`;
 }
@@ -2886,6 +2984,9 @@ function updateNavTabs() {
 
 // ── LOGIN LOGIC ────────────────────────────────────────
 function pinPress(k) {
+  // Block input if user is locked out
+  const _lu = S.pendingUser ? _getPinLockout(S.pendingUser.id) : null;
+  if (_lu?.locked) { vibrate([15,30,15]); sfx('error'); return; }
   // Ripple on key
   const rippleEl = k === 'del' ? document.getElementById('pinDel')
     : k === 'face' ? document.getElementById('pinFaceBtn')
@@ -2910,8 +3011,19 @@ function pinPress(k) {
   if (S.pin.length === 4) {
     setTimeout(() => {
       const u = S.users.find(x => x.id === S.pendingUser?.id) || S.pendingUser;
-      if (S.pin === u?.pin) { doLogin(u); }
-      else { vibrate([10,60,10,60,10]); sfx('error'); S.pinErr = true; S.pin = ''; updatePinDots(); }
+      if (S.pin === u?.pin) {
+        _clearPinFail(u.id);
+        doLogin(u);
+      } else {
+        vibrate([10,60,10,60,10]); sfx('error');
+        S.pinErr = true; S.pin = '';
+        const { justLocked } = _recordPinFail(u.id, u.name);
+        if (justLocked) {
+          renderScreen(); // show the lockout screen
+        } else {
+          updatePinDots();
+        }
+      }
     }, 120);
   }
 }
@@ -2932,12 +3044,16 @@ function updatePinDots() {
     return `<div style="width:18px;height:18px;border-radius:50%;background:${bg};border:2px solid ${border};box-shadow:${glow};animation:${anim};transform:${filled?'scale(1.15)':'scale(1)'};transition:all .18s"></div>`;
   }).join('');
 
-  // error message
+  // error message with remaining attempts hint
   let errMsg = dots.parentElement?.querySelector('.pin-error-msg');
   if (S.pinErr && !errMsg) {
+    const lo = S.pendingUser ? _getPinLockout(S.pendingUser.id) : null;
+    const showWarn = lo && !lo.locked && lo.count > 0 && lo.attemptsLeft <= 3;
     const msg = document.createElement('div');
     msg.className = 'pin-error-msg';
-    msg.textContent = 'PIN ไม่ถูกต้อง — ลองอีกครั้ง';
+    msg.textContent = showWarn
+      ? `PIN ไม่ถูกต้อง — เหลืออีก ${lo.attemptsLeft} ครั้ง`
+      : 'PIN ไม่ถูกต้อง — ลองอีกครั้ง';
     dots.insertAdjacentElement('afterend', msg);
   } else if (!S.pinErr && errMsg) {
     errMsg.remove();
@@ -2952,6 +3068,7 @@ function doLogin(u) {
   S.loginStep = 'profiles'; S.pin = ''; S.faceStage = 'scanning';
   S.lastActivity = Date.now();
   try { localStorage.setItem('session', JSON.stringify({ uid: u.id, exp: Date.now() + 8*3600*1000 })); } catch(e) {}
+  addLog('เข้าสู่ระบบ', `${u.name} (${u.role}) — เข้าสู่ระบบสำเร็จ`);
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
   }
@@ -3379,6 +3496,16 @@ function acceptScan() {
     if (qtyEl && qtyEl.value.trim()) S.scanResult.qty = Math.max(1, parseInt(qtyEl.value) || 1);
     delete S.scanResult.needsExpiry;
   }
+
+  // HIGH-ALERT: require second pharmacist confirmation before acceptance
+  if (S.scanResult.highAlert && !S.scanResult._haDoubleChecked) {
+    _showHighAlertDoubleCheck(witness => {
+      S.scanResult._haDoubleChecked = true;
+      acceptScan(); // re-enter after confirmation
+    });
+    return;
+  }
+  delete S.scanResult._haDoubleChecked;
 
   vibrate([8,40,12]); sfx('success');
   speak(S.scanResult.name);
@@ -4418,6 +4545,113 @@ function checkRecall(result) {
     (r.lotNo && result.lot && r.lotNo === result.lot) ||
     (r.gtin  && result.gtin && r.gtin === result.gtin)
   ) || null;
+}
+
+// ── HIGH-ALERT DOUBLE-CHECK ────────────────────────────
+// Requires a second pharmacist to confirm with their PIN before accepting a HIGH-ALERT drug.
+function _showHighAlertDoubleCheck(onConfirmed) {
+  document.getElementById('haDoubleCheckOverlay')?.remove();
+  const r = S.scanResult;
+  const otherUsers = S.users.filter(u => u.id !== S.user?.id);
+
+  const renderHAOverlay = (witnessId, witnessPin, witnessErr) => {
+    document.getElementById('haDoubleCheckOverlay')?.remove();
+    const witnessOpts = otherUsers.map(u =>
+      `<option value="${u.id}"${u.id === witnessId ? ' selected' : ''}>${u.name} · ${u.role}</option>`
+    ).join('');
+
+    const pinDots = [0,1,2,3].map(i => {
+      const filled = i < witnessPin.length;
+      const bg = filled ? (witnessErr ? '#ff4d5e' : '#009E9E') : 'transparent';
+      const border = filled ? (witnessErr ? '#ff4d5e' : '#009E9E') : 'rgba(255,255,255,.25)';
+      return `<div style="width:16px;height:16px;border-radius:50%;background:${bg};border:2px solid ${border};transition:all .15s;transform:${filled?'scale(1.12)':'scale(1)'}"></div>`;
+    }).join('');
+
+    const keyBtns = ['1','2','3','4','5','6','7','8','9','','0','del'].map(k => {
+      if (!k) return `<div></div>`;
+      if (k === 'del') return `<button class="ha-pin-key ha-pin-del" data-key="del" style="opacity:${witnessPin.length>0?1:.3}">⌫</button>`;
+      return `<button class="ha-pin-key" data-key="${k}">${k}</button>`;
+    }).join('');
+
+    const html = `
+      <div class="overlay" id="haDoubleCheckOverlay" style="z-index:9000">
+        <div id="confirm-box" style="border:2px solid #ff4d5e;max-width:320px;padding:24px 20px 20px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+            <span style="font-size:28px;line-height:1">⬢</span>
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#ff4d5e">HIGH-ALERT — ยืนยัน 2 คน</div>
+              <div style="font-size:12px;color:var(--ink2);margin-top:2px">${r?.name || ''}</div>
+            </div>
+          </div>
+
+          ${otherUsers.length === 0 ? `
+            <div style="padding:12px;background:rgba(255,155,67,.1);border:1px solid rgba(255,155,67,.35);border-radius:12px;font-size:13px;color:#ff9f43;text-align:center;line-height:1.6">
+              ไม่มีบัญชีผู้ใช้อื่น<br>ไม่สามารถยืนยัน 2 คนได้<br><span style="font-size:11px;color:var(--ink3)">กรุณาเพิ่มบัญชีใน ตั้งค่า</span>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px">
+              <button id="haCancel" style="flex:1;padding:13px;border-radius:13px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ยกเลิก</button>
+              <button id="haForceAccept" style="flex:1.2;padding:13px;border-radius:13px;border:none;background:linear-gradient(135deg,#ff9f43,#e07200);color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:'Sarabun',sans-serif">บันทึก (1 คน)</button>
+            </div>
+          ` : `
+            <div style="margin-bottom:12px">
+              <div style="font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">ผู้ยืนยัน (คนที่ 2)</div>
+              <select id="haWitnessSel" style="width:100%;padding:11px 14px;border-radius:12px;border:1px solid var(--glassb);background:var(--card);color:var(--ink);font-size:14px;font-family:'Sarabun',sans-serif;cursor:pointer">
+                ${witnessOpts}
+              </select>
+            </div>
+            <div style="margin-bottom:8px">
+              <div style="font-size:11px;font-weight:600;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">PIN ของผู้ยืนยัน</div>
+              <div style="display:flex;gap:14px;justify-content:center;margin-bottom:${witnessErr?'4px':'12px'}" id="haPinDots">${pinDots}</div>
+              ${witnessErr ? `<div style="text-align:center;font-size:12px;color:#ff4d5e;margin-bottom:8px">PIN ไม่ถูกต้อง</div>` : ''}
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px" id="haPinKeypad">${keyBtns}</div>
+            <button id="haCancel" style="width:100%;padding:13px;border-radius:13px;border:1px solid var(--glassb);background:transparent;color:var(--ink);font-size:14px;font-weight:600;cursor:pointer;font-family:'Sarabun',sans-serif">ยกเลิก</button>
+          `}
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    // Bind events
+    document.getElementById('haCancel')?.addEventListener('click', () => {
+      document.getElementById('haDoubleCheckOverlay')?.remove();
+    });
+    document.getElementById('haForceAccept')?.addEventListener('click', () => {
+      document.getElementById('haDoubleCheckOverlay')?.remove();
+      addLog('HIGH-ALERT รับโดยไม่มีพยาน', `${r?.name || ''} — ผู้ใช้เดิม ${S.user?.name || '—'}`);
+      onConfirmed(null);
+    });
+    document.getElementById('haWitnessSel')?.addEventListener('change', e => {
+      renderHAOverlay(e.target.value, '', false);
+    });
+    document.getElementById('haPinKeypad')?.querySelectorAll('.ha-pin-key[data-key]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+        let curPin = witnessPin;
+        const curWitId = document.getElementById('haWitnessSel')?.value || witnessId;
+        if (key === 'del') {
+          curPin = curPin.slice(0, -1);
+          renderHAOverlay(curWitId, curPin, false);
+          return;
+        }
+        if (curPin.length >= 6) return;
+        curPin += key;
+        const witness = S.users.find(u => u.id === curWitId);
+        if (curPin.length >= 4 && witness && curPin === witness.pin) {
+          document.getElementById('haDoubleCheckOverlay')?.remove();
+          addLog('HIGH-ALERT ยืนยัน 2 คน', `${r?.name || ''} — พยาน: ${witness.name} (${witness.role})`);
+          vibrate([6,30,10]); sfx('success');
+          onConfirmed(witness);
+        } else if (curPin.length >= 6) {
+          vibrate([10,50,10,50,10]); sfx('error');
+          renderHAOverlay(curWitId, '', true);
+        } else {
+          renderHAOverlay(curWitId, curPin, false);
+        }
+      });
+    });
+  };
+
+  renderHAOverlay(otherUsers[0]?.id || '', '', false);
 }
 
 function showRecallAlert(recall, item) {

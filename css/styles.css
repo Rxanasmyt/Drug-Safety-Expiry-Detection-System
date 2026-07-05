@@ -1386,6 +1386,18 @@ body {
   background: var(--glass); border: 1px solid var(--glassb);
 }
 
+/* ── HIGH-ALERT DOUBLE-CHECK KEYPAD ─────────────────── */
+.ha-pin-key {
+  display: flex; align-items: center; justify-content: center;
+  height: 52px; border-radius: 14px;
+  border: 1px solid var(--glassb); background: var(--glass);
+  color: var(--ink); font-size: 20px; font-weight: 600;
+  cursor: pointer; font-family: 'Sarabun', sans-serif;
+  transition: all .15s; user-select: none;
+}
+.ha-pin-key:active { transform: scale(.92); background: rgba(0,158,158,.15); }
+.ha-pin-del { font-size: 18px; color: var(--ink2); }
+
 /* ── SHEET (bottom overlay) ──────────────────────────── */
 .sheet-title { font-size: 15px; font-weight: 700; color: var(--ink); }
 .sheet-subtitle { font-size: 12px; color: var(--ink2); margin-bottom: 14px; }
