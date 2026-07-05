@@ -18,6 +18,8 @@ const drugCacheRef = db.collection('drugCache');   // GTIN → drug metadata, sh
 const recallsRef   = db.collection('recalls');     // Lot recall alerts issued by pharmacy admin
 const disposalsRef = db.collection('disposals');   // Drug disposal records (2-person confirmation)
 const dispensingRef = db.collection('dispensing'); // Patient dispensing records
+const usersRef     = db.collection('users');       // Staff accounts — synced across all devices
+const auditRef     = db.collection('auditLog');    // Audit trail — all actions logged here
 
 db.enablePersistence({ synchronizeTabs: true }).catch(err => {
   if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {

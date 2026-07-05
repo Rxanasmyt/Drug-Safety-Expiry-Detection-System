@@ -2697,6 +2697,8 @@ function showUserForm(user) {
   document.getElementById('uformDelete')?.addEventListener('click', () => {
     if (user.id === S.user?.id) { showToast('⚠ ไม่สามารถลบบัญชีที่กำลังใช้งาน', '#ff4d5e'); return; }
     S.users = S.users.filter(u => u.id !== user.id);
+    // Remove from Firestore too
+    if (typeof usersRef !== 'undefined') usersRef.doc(user.id).delete().catch(e => console.warn('User delete:', e));
     addLog('ลบบัญชีผู้ใช้', user.name);
     showToast(`✓ ลบ ${user.name} แล้ว`, '#ff9f43');
     _saveUsers();
@@ -2706,7 +2708,43 @@ function showUserForm(user) {
 }
 
 function _saveUsers() {
+  // 1. localStorage fallback (instant, offline-safe)
   try { localStorage.setItem('_users', JSON.stringify(S.users)); } catch(e) {}
+  // 2. Firestore — overwrite entire users collection with current S.users
+  if (typeof usersRef === 'undefined') return;
+  const batch = db.batch();
+  // Overwrite each user doc by their ID
+  S.users.forEach(u => {
+    batch.set(usersRef.doc(u.id), {
+      name: u.name, en: u.en || '', role: u.role, pin: u.pin, color: u.color,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: S.user?.name || 'system',
+    });
+  });
+  batch.commit().catch(e => console.warn('Users Firestore write:', e));
+}
+
+function initUsers() {
+  if (typeof usersRef === 'undefined') return;
+  usersRef.onSnapshot(snapshot => {
+    if (snapshot.empty) {
+      // No users in Firestore yet — push the default user up
+      _saveUsers();
+      return;
+    }
+    const fsUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // Keep default admin if Firestore returns nothing useful
+    if (fsUsers.length > 0) {
+      S.users = fsUsers;
+      try { localStorage.setItem('_users', JSON.stringify(S.users)); } catch(e) {}
+      // If current session user was updated, refresh S.user reference
+      if (S.user) {
+        const refreshed = S.users.find(u => u.id === S.user.id);
+        if (refreshed) S.user = refreshed;
+      }
+      if (S.screen === 'app' && S.tab === 'cfg') updateTabBody();
+    }
+  }, err => console.warn('Users sync:', err.code || err.message));
 }
 
 function bindSheetEvents() {
@@ -3541,14 +3579,42 @@ function showDrugSheet(it) {
 
 // ── AUDIT LOG ─────────────────────────────────────────
 function addLog(action, detail) {
-  S.auditLog.unshift({
+  const entry = {
     id: 'l' + Date.now(),
     ts: new Date(),
     user: S.user?.name || '—',
     role: S.user?.role || '—',
     action, detail,
-  });
+  };
+  S.auditLog.unshift(entry);
   if (S.auditLog.length > 200) S.auditLog.splice(200);
+  // Persist to Firestore (fire-and-forget)
+  if (typeof auditRef !== 'undefined') {
+    auditRef.add({
+      action, detail,
+      user: entry.user, role: entry.role,
+      ts: firebase.firestore.FieldValue.serverTimestamp(),
+    }).catch(e => console.warn('AuditLog write:', e));
+  }
+}
+
+function initAuditLog() {
+  if (typeof auditRef === 'undefined') return;
+  auditRef
+    .orderBy('ts', 'desc')
+    .limit(200)
+    .onSnapshot(snapshot => {
+      S.auditLog = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          ts: d.ts?.toDate ? d.ts.toDate() : new Date(),
+          user: d.user || '—', role: d.role || '—',
+          action: d.action || '', detail: d.detail || '',
+        };
+      });
+      if (S.screen === 'app' && S.tab === 'cfg') updateTabBody();
+    }, err => console.warn('AuditLog sync:', err.code || err.message));
 }
 
 // ── FIREBASE INTEGRATION ──────────────────────────────
@@ -4816,6 +4882,8 @@ document.addEventListener('DOMContentLoaded', () => {
   try { initFirestore(); } catch(e) { console.warn('Firestore init:', e); }
   try { initDrugCache(); } catch(e) { console.warn('Drug cache init:', e); }
   try { initRecalls(); } catch(e) { console.warn('Recalls init:', e); }
+  try { initUsers(); } catch(e) { console.warn('Users init:', e); }
+  try { initAuditLog(); } catch(e) { console.warn('AuditLog init:', e); }
 
   // Periodic notify check every 30 minutes
   setInterval(() => { if (S.screen === 'app') checkAndNotify(); }, 30 * 60 * 1000);
