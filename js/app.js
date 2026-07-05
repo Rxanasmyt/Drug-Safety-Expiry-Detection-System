@@ -186,7 +186,10 @@ async function analyzeWithGemini(src) {
   // src can be: HTMLCanvasElement, File/Blob, or already-compressed base64 string (from camera path)
   const b64 = (typeof src === 'string') ? src : await compressForAI(src);
   if (!b64) return null;
+  return _callGeminiAPI(b64, key, 0);
+}
 
+async function _callGeminiAPI(b64, key, attempt) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
@@ -213,7 +216,13 @@ async function analyzeWithGemini(src) {
     clearTimeout(timer);
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.error?.message || `HTTP ${res.status}`);
+      const msg = errBody.error?.message || `HTTP ${res.status}`;
+      // Retry once on 5xx server errors
+      if (res.status >= 500 && attempt < 1) {
+        await new Promise(r => setTimeout(r, 900));
+        return _callGeminiAPI(b64, key, attempt + 1);
+      }
+      throw new Error(msg);
     }
     const resp = await res.json();
     const raw = (resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim();
@@ -222,22 +231,43 @@ async function analyzeWithGemini(src) {
     return _mergeDrugCache(data);
   } catch(e) {
     clearTimeout(timer);
-    if (e.name === 'AbortError') throw new Error('Gemini หมดเวลา 15 วินาที — ลองอีกครั้ง');
+    if (e.name === 'AbortError') {
+      // Retry once on timeout
+      if (attempt < 1) {
+        await new Promise(r => setTimeout(r, 800));
+        return _callGeminiAPI(b64, key, attempt + 1);
+      }
+      throw new Error('Gemini หมดเวลา — กรุณาลองอีกครั้ง (เครือข่ายช้า)');
+    }
     throw e;
   }
 }
 
 // ── HELPERS ───────────────────────────────────────────
+const _todayDayNum = () => Math.floor(Date.now() / 86400000); // changes at UTC midnight
 function daysLeft(exp) {
-  return Math.ceil((new Date(exp) - new Date()) / 86400000);
+  if (!exp) return 9999;
+  const expMs = (exp instanceof Date) ? exp.getTime() : new Date(exp).getTime();
+  return Math.ceil((expMs - Date.now()) / 86400000);
 }
+
+// Memoized itemStatus — cache key encodes exp+thresholds+today so results
+// stay valid all day and auto-invalidate at midnight or threshold change.
+const _statusCache = new Map();
 function itemStatus(it) {
-  const d = daysLeft(it.exp);
+  const expMs = it.exp instanceof Date ? it.exp.getTime() : new Date(it.exp || 0).getTime();
   const { threshRed: r, threshOrange: o, threshYellow: y } = S.settings;
-  if (d <= r) return { key: 'RED', c: '#ff4d5e', label: d < 0 ? `หมดอายุ ${-d} วัน` : `เหลือ ${d} วัน`, shape: 'oct' };
-  if (d <= o) return { key: 'ORANGE', c: '#ff9f43', label: `คืนบริษัทได้ · ${d} วัน`, shape: 'tri' };
-  if (d <= y) return { key: 'YELLOW', c: '#ffd23f', label: `เหลือ ${d} วัน`, shape: 'dia' };
-  return { key: 'GREEN', c: '#2ee6a6', label: `ปลอดภัย · ${d} วัน`, shape: 'cir' };
+  const cacheKey = `${expMs}-${_todayDayNum()}-${r}-${o}-${y}`;
+  if (_statusCache.has(cacheKey)) return _statusCache.get(cacheKey);
+  const d = Math.ceil((expMs - Date.now()) / 86400000);
+  let result;
+  if (d <= r) result = { key: 'RED', c: '#ff4d5e', label: d < 0 ? `หมดอายุ ${-d} วัน` : `เหลือ ${d} วัน`, shape: 'oct' };
+  else if (d <= o) result = { key: 'ORANGE', c: '#ff9f43', label: `คืนบริษัทได้ · ${d} วัน`, shape: 'tri' };
+  else if (d <= y) result = { key: 'YELLOW', c: '#ffd23f', label: `เหลือ ${d} วัน`, shape: 'dia' };
+  else result = { key: 'GREEN', c: '#2ee6a6', label: `ปลอดภัย · ${d} วัน`, shape: 'cir' };
+  if (_statusCache.size > 2000) _statusCache.clear(); // bound memory
+  _statusCache.set(cacheKey, result);
+  return result;
 }
 function medColor(name) {
   const pal = ['#6366f1','#0ea5e9','#14b8a6','#8b5cf6','#0891b2','#4f46e5'];
@@ -303,6 +333,10 @@ function currentTime() {
   return fmtTime(n);
 }
 function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch(e) {} }
+function _debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
 
 // ── AUDIO ─────────────────────────────────────────────
 let _actx = null;
@@ -338,14 +372,23 @@ function speak(t) {
 
 // ── TOAST ─────────────────────────────────────────────
 let _toastTimer = null;
-function showToast(msg, color, ms) {
+function showToast(msg, color, ms, actionLabel, actionFn) {
   const el = document.getElementById('toast');
+  if (!el) return;
   el.style.borderColor = (color||'#2dd4bf') + '66';
   el.style.boxShadow = `0 0 28px -6px ${color||'#2dd4bf'}66`;
-  el.innerHTML = `<span style="flex:1">${msg}</span>`;
+  const actionHTML = actionLabel ? `<button id="toast-action-btn" style="margin-left:10px;padding:4px 10px;border-radius:8px;border:1px solid currentColor;background:transparent;color:${color||'#2dd4bf'};font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">${actionLabel}</button>` : '';
+  el.innerHTML = `<span style="flex:1">${msg}</span>${actionHTML}`;
   el.classList.remove('hidden');
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => el.classList.add('hidden'), ms || 2800);
+  if (actionLabel && actionFn) {
+    document.getElementById('toast-action-btn')?.addEventListener('click', () => {
+      clearTimeout(_toastTimer);
+      el.classList.add('hidden');
+      actionFn();
+    });
+  }
 }
 
 // ── THEME ─────────────────────────────────────────────
@@ -711,6 +754,7 @@ function renderScanTab() {
 
   /* scan stats */
   const redCount = S.items.filter(i => itemStatus(i).key === 'RED').length;
+  const lowStockCount = S.items.filter(i => i.minStock > 0 && i.qty <= i.minStock).length;
   const sk = getStreakData();
   const statsHTML = `
     <div class="scan-stats-bar">
@@ -726,7 +770,10 @@ function renderScanTab() {
         <div class="scan-stat-val" style="color:${redCount>0?'#ff4d5e':'#2ee6a6'}">${redCount}</div>
         <div class="scan-stat-label">ยาเสี่ยง</div>
       </div>
-      ${sk.streak > 0 ? `<div class="scan-stat" style="animation-delay:.2s">
+      ${lowStockCount > 0 ? `<div class="scan-stat" style="animation-delay:.2s">
+        <div class="scan-stat-val" style="color:#ff9f43">${lowStockCount}</div>
+        <div class="scan-stat-label">สต๊อกต่ำ</div>
+      </div>` : sk.streak > 0 ? `<div class="scan-stat" style="animation-delay:.2s">
         <div class="scan-stat-val" style="color:#ff9f43">🔥${sk.streak}</div>
         <div class="scan-stat-label">วันติดต่อกัน</div>
       </div>` : ''}
@@ -981,14 +1028,20 @@ function renderScanResult(r) {
 }
 
 // ── STOCK TAB ─────────────────────────────────────────
+function _countByFilter(k) {
+  if (k === 'all') return S.items.length;
+  if (k === 'FRONT_SHELF' || k === 'SUBSTOCK') return S.items.filter(i => i.loc === k).length;
+  return S.items.filter(i => itemStatus(i).key === k).length;
+}
+
 function renderStockTab() {
-  const filters = [
+  const filterDefs = [
     { k:'all', label:'ทั้งหมด' },
     { k:'RED', label:'🔴 แดง' },
     { k:'ORANGE', label:'🟠 ส้ม' },
     { k:'YELLOW', label:'🟡 เหลือง' },
     { k:'GREEN', label:'🟢 เขียว' },
-    { k:'FRONT_SHELF', label:'🛎 หน้าเคาน์เตอร์' },
+    { k:'FRONT_SHELF', label:'🛎 เคาน์เตอร์' },
     { k:'SUBSTOCK', label:'📦 คลัง' },
   ];
   const q = S.stockSearch.toLowerCase();
@@ -997,7 +1050,18 @@ function renderStockTab() {
     if (['FRONT_SHELF','SUBSTOCK'].includes(S.stockFilter)) return it.loc === S.stockFilter;
     return itemStatus(it).key === S.stockFilter;
   }).filter(it => !q || (it.name+it.gen+it.lot).toLowerCase().includes(q));
-  items = items.sort((a,b) => daysLeft(a.exp) - daysLeft(b.exp));
+
+  // Sort
+  const sort = S.stockSort || 'exp';
+  items = items.sort((a,b) => {
+    if (sort === 'name') return (a.name||'').localeCompare(b.name||'', 'th');
+    if (sort === 'qty') return a.qty - b.qty;
+    if (sort === 'status') {
+      const order = { RED:0, ORANGE:1, YELLOW:2, GREEN:3 };
+      return (order[itemStatus(a).key]||3) - (order[itemStatus(b).key]||3);
+    }
+    return daysLeft(a.exp) - daysLeft(b.exp); // default: exp
+  });
 
   const front = items.filter(i => i.loc === 'FRONT_SHELF');
   const sub = items.filter(i => i.loc === 'SUBSTOCK');
@@ -1010,6 +1074,7 @@ function renderStockTab() {
       if (it.highAlert) flags.push(`<span class="flag-tag ha-flag">HIGH-ALERT</span>`);
       if (it.lasa) flags.push(`<span class="flag-tag lasa-flag">LASA</span>`);
       if (it.cold) flags.push(`<span class="flag-tag cold-flag">❄ COLD</span>`);
+      const lowStockWarn = it.minStock > 0 && it.qty <= it.minStock;
       return `<div class="drug-card" data-id="${it.id}">
         <div class="drug-card-status-bar" style="background:${st.c}"></div>
         ${medAvatarHTML(it, 46)}
@@ -1019,7 +1084,7 @@ function renderStockTab() {
           <div class="drug-meta">
             <span class="drug-lot">${it.lot}</span>
             <span class="drug-exp">${fmtDate(it.exp)}</span>
-            <span class="drug-qty-badge">${it.qty} หน่วย</span>
+            <span class="drug-qty-badge${lowStockWarn?' low-stock-warn':''}">${it.qty} หน่วย${lowStockWarn?' ⚠':''}</span>
             ${flags.join('')}
           </div>
         </div>
@@ -1035,6 +1100,13 @@ function renderStockTab() {
 
   const showSections = !S.stockFilter || S.stockFilter === 'all' || !['FRONT_SHELF','SUBSTOCK'].includes(S.stockFilter);
 
+  const sortOpts = [
+    { v:'exp',    l:'วันหมดอายุ' },
+    { v:'status', l:'สถานะ' },
+    { v:'name',   l:'ชื่อยา' },
+    { v:'qty',    l:'จำนวน' },
+  ];
+
   return `
     <div class="stock-header">
       <button class="stock-transfer-btn" id="bulkTransferBtn">
@@ -1042,9 +1114,17 @@ function renderStockTab() {
       </button>
     </div>
     <div class="stock-filter-wrap">
-      ${filters.map(f => `<button class="stock-filter-btn${S.stockFilter===f.k?' active':''}" data-filter="${f.k}">${f.label}</button>`).join('')}
+      ${filterDefs.map(f => {
+        const cnt = _countByFilter(f.k);
+        return `<button class="stock-filter-btn${S.stockFilter===f.k?' active':''}" data-filter="${f.k}">${f.label}<span class="stock-filter-count">${cnt}</span></button>`;
+      }).join('')}
     </div>
-    <input class="stock-search" id="stockSearchInput" placeholder="🔍 ค้นหา ชื่อยา, Lot, Generic…" value="${S.stockSearch}">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input class="stock-search" id="stockSearchInput" placeholder="🔍 ค้นหา ชื่อยา, Lot, Generic…" value="${S.stockSearch}" style="flex:1;margin-bottom:0">
+      <select id="stockSortSel" style="padding:9px 10px;border-radius:12px;border:1px solid var(--glassb);background:var(--glass);color:var(--ink);font-family:'Sarabun',sans-serif;font-size:12.5px;font-weight:600;cursor:pointer;outline:none;min-width:100px">
+        ${sortOpts.map(o => `<option value="${o.v}"${sort===o.v?' selected':''}>${o.l}</option>`).join('')}
+      </select>
+    </div>
     ${showSections ? `
       <div class="stock-section-label">🛎 FRONT SHELF <span class="stock-section-count">${front.length}</span></div>
       ${cardList(front)}
@@ -2407,6 +2487,11 @@ function _startAllDetectors(videoEl) {
   }
 }
 
+const _stockSearchDebounced = _debounce(val => {
+  S.stockSearch = val;
+  updateTabBody();
+}, 50);
+
 function bindStockTab() {
   document.querySelectorAll('.stock-filter-btn[data-filter]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2415,8 +2500,14 @@ function bindStockTab() {
     });
   });
   const search = document.getElementById('stockSearchInput');
-  if (search) search.addEventListener('input', e => {
-    S.stockSearch = e.target.value;
+  if (search) {
+    search.addEventListener('input', e => _stockSearchDebounced(e.target.value));
+    // Keep focus after tab re-render (search was active)
+    if (S.stockSearch) setTimeout(() => { search.focus(); search.setSelectionRange(search.value.length, search.value.length); }, 0);
+  }
+  const sortSel = document.getElementById('stockSortSel');
+  if (sortSel) sortSel.addEventListener('change', e => {
+    S.stockSort = e.target.value;
     updateTabBody();
   });
   document.querySelectorAll('.drug-card[data-id]').forEach(card => {
@@ -2462,6 +2553,7 @@ function bindCfgTab() {
       S.settings[e.target.dataset.thresh] = parseInt(e.target.value);
       const label = e.target.closest('.thresh-row')?.querySelector('.thresh-val');
       if (label) label.textContent = e.target.value + ' วัน';
+      _statusCache.clear(); // thresholds changed — invalidate cached statuses
       saveSettings();
     });
   });
@@ -3144,9 +3236,20 @@ function acceptScan() {
     S.batchSession.items.push(scannedItem);
   }
 
-  addToItems(S.scanResult);
+  const undoFn = addToItems(S.scanResult);
   addLog('รับเข้าสต๊อก', savedName + ' Lot ' + savedLot + ' → ' + savedDest);
-  showToast(`✓ รับ ${savedName} · ${S.rapidMode ? 'พร้อมถ่ายยาชิ้นถัดไป 📷' : 'เข้า' + (savedDest==='SUBSTOCK'?'คลัง':'เคาน์เตอร์')}`, '#2ee6a6', 2200);
+  const toastMsg = `✓ รับ ${savedName} · ${S.rapidMode ? 'พร้อมถ่ายยาชิ้นถัดไป 📷' : 'เข้า' + (savedDest==='SUBSTOCK'?'คลัง':'เคาน์เตอร์')}`;
+  if (!S.rapidMode) {
+    showToast(toastMsg, '#2ee6a6', 10000, '↩ เลิกทำ', () => {
+      undoFn();
+      S.scanHistory.shift(); // remove from history
+      addLog('เลิกทำ', `ยกเลิกรับ ${savedName}`);
+      updateTabBody();
+      showToast(`↩ ยกเลิกรับ ${savedName} แล้ว`, '#ff9f43', 2200);
+    });
+  } else {
+    showToast(toastMsg, '#2ee6a6', 2200);
+  }
   S.scanResult = null; S.scanState = 'idle';
   updateTabBody();
   saveToFirestore(S.scanHistory[0]);
@@ -3172,17 +3275,30 @@ function addToItems(r) {
     (r.lot && i.lot === r.lot && i.name === r.name) ||
     (r.gtin && i.gtin === r.gtin && r.lot && i.lot === r.lot)
   );
+  const added = r.qty || 1;
+  const prevExp = existing?.exp;
   if (existing) {
-    existing.qty += (r.qty || 1);
+    existing.qty += added;
     if (r.exp) existing.exp = r.exp;
+    // Return undo: decrement qty, restore exp
+    return () => {
+      existing.qty = Math.max(0, existing.qty - added);
+      if (prevExp !== undefined) existing.exp = prevExp;
+    };
   } else {
-    S.items.unshift({
+    const newItem = {
       id: 'scan-' + Date.now(),
-      name: r.name, gen: r.gen||'', lot: r.lot||'', exp, qty: r.qty||1,
+      name: r.name, gen: r.gen||'', lot: r.lot||'', exp, qty: added,
       loc, highAlert: !!r.highAlert, lasa: !!r.lasa, cold: !!r.cold, age: 0,
       form: r.cold ? 'pen' : r.highAlert ? 'vial' : 'tab',
       gtin: r.gtin || '', mfd: r.mfd || null,
-    });
+    };
+    S.items.unshift(newItem);
+    // Return undo: remove the new item
+    return () => {
+      const idx = S.items.indexOf(newItem);
+      if (idx !== -1) S.items.splice(idx, 1);
+    };
   }
 }
 
