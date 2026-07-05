@@ -183,36 +183,48 @@ function initDrugCache() {
 async function analyzeWithGemini(src) {
   const key = S.settings.geminiKey || localStorage.getItem('geminiKey') || '';
   if (!key) return null;
-  const b64 = await compressForAI(src);
+  // src can be: HTMLCanvasElement, File/Blob, or already-compressed base64 string (from camera path)
+  const b64 = (typeof src === 'string') ? src : await compressForAI(src);
   if (!b64) return null;
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${encodeURIComponent(key)}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [
-          { text: DRUG_LABEL_PROMPT },
-          { inline_data: { mime_type: 'image/jpeg', data: b64 } },
-        ]}],
-        generationConfig: {
-          temperature: 0,
-          maxOutputTokens: 256,
-          responseMimeType: 'application/json',
-          responseSchema: GEMINI_SCHEMA,
-        },
-      }),
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [
+            { text: DRUG_LABEL_PROMPT },
+            { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+          ]}],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 256,
+            responseMimeType: 'application/json',
+            responseSchema: GEMINI_SCHEMA,
+          },
+        }),
+      }
+    );
+    clearTimeout(timer);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error?.message || `HTTP ${res.status}`);
     }
-  );
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.error?.message || `HTTP ${res.status}`);
+    const resp = await res.json();
+    const raw = (resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim();
+    const data = JSON.parse(raw);
+    _saveDrugCache(data);
+    return _mergeDrugCache(data);
+  } catch(e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error('Gemini หมดเวลา 15 วินาที — ลองอีกครั้ง');
+    throw e;
   }
-  const resp = await res.json();
-  const raw = (resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim();
-  const data = JSON.parse(raw);
-  _saveDrugCache(data);
-  return _mergeDrugCache(data);
 }
 
 // ── HELPERS ───────────────────────────────────────────
@@ -1227,7 +1239,7 @@ function renderDashTab() {
       ${isAdmin ? `<button class="dash-action-btn dash-action-btn-red" id="addRecallBtn">🚨 เพิ่ม Recall</button>` : ''}
     </div>
 
-    <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:14px;font-family:'JetBrains Mono',monospace">
+    <div style="font-size:11px;color:var(--ink3);text-align:center;margin-top:14px;padding-bottom:16px;font-family:'JetBrains Mono',monospace">
       อัปเดต ${currentTime()} · ${new Date().toLocaleDateString('th-TH-u-ca-gregory', { day:'2-digit', month:'short', year:'numeric' })}
     </div>`;
 }
@@ -1528,7 +1540,10 @@ function bindApp() {
   document.querySelectorAll('.nav-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
-      if (S.cameraActive && btn.dataset.tab !== 'scan') stopCamera();
+      if (btn.dataset.tab !== 'scan') {
+        if (S.cameraActive) stopCamera();
+        closePhotoCap(true); // stop photo camera stream when leaving scan tab
+      }
       S.tab = btn.dataset.tab;
       renderAppBody(); updateNavTabs();
     });
@@ -1539,6 +1554,8 @@ function bindApp() {
     vibrate(6); S.sheet = 'notif'; renderAppBody(); updateNavTabs();
   });
   document.getElementById('lockBtn')?.addEventListener('click', () => {
+    if (S.cameraActive) stopCamera();
+    closePhotoCap(true);
     try { localStorage.removeItem('session'); } catch(e) {}
     S.screen = 'lock'; S.user = null; S.loginStep = 'profiles'; renderScreen();
   });
@@ -1867,6 +1884,10 @@ function openPhotoCap() {
     document.getElementById('photoScanInput')?.click();
     return;
   }
+  if (!S.settings.geminiKey && !localStorage.getItem('geminiKey')) {
+    showToast('ตั้งค่า Gemini API Key ก่อนใช้กล้อง AI (แท็บ ⚙ ตั้งค่า)', '#ff9f43', 3500);
+    return;
+  }
   const overlay = document.createElement('div');
   overlay.id = 'photoCap';
   overlay.className = 'pcap-overlay';
@@ -2005,9 +2026,9 @@ function _startStabilityLoop(video) {
       for (let i = 0; i < curr.length; i += 4)
         diff += Math.abs(curr[i] - prev[i]) + Math.abs(curr[i+1] - prev[i+1]) + Math.abs(curr[i+2] - prev[i+2]);
       const motion = diff / (64 * 36 * 3); // 0-255 per pixel
-      stableN = motion < 4 ? Math.min(stableN + 1, 14) : 0;
-      const stable = stableN >= 10; // ~1s
-      const almostStable = stableN >= 5;
+      stableN = motion < 6 ? Math.min(stableN + 1, 12) : Math.max(stableN - 2, 0);
+      const stable = stableN >= 8; // ~0.8s at 10fps sampling
+      const almostStable = stableN >= 4;
       if (dot) dot.style.background = stable ? '#2ee6a6' : almostStable ? '#ffd23f' : '#ff4d5e';
       if (txt) txt.textContent = stable ? 'นิ่งแล้ว ✓' : almostStable ? 'กำลังนิ่ง...' : 'ถือนิ่งๆ';
       if (stable && S.autoCapture && !_pcAutoLock) {
@@ -2553,6 +2574,11 @@ function renderAppBody() {
   bindTabEvents();
   bindSheetEvents();
   bindConfirmEvents();
+
+  // Sync topbar title with current tab (topbar is outside #tab-body so not rebuilt above)
+  const _tabNames = { scan:'สแกนรับยา', stock:'คลังยา', dash:'รายงาน & KPI', cfg:'ตั้งค่าระบบ' };
+  const _tabNameEl = document.querySelector('.topbar-tab-name');
+  if (_tabNameEl) _tabNameEl.textContent = _tabNames[S.tab] || '';
 }
 
 function updateTabBody() {
@@ -2580,7 +2606,10 @@ function updateNavTabs() {
   nav.querySelectorAll('.nav-tab[data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       vibrate(6); sfx('tick');
-      if (S.cameraActive && btn.dataset.tab !== 'scan') stopCamera();
+      if (btn.dataset.tab !== 'scan') {
+        if (S.cameraActive) stopCamera();
+        closePhotoCap(true); // stop photo camera stream when leaving scan tab
+      }
       S.tab = btn.dataset.tab; S.sheet = null;
       renderAppBody(); updateNavTabs();
     });
