@@ -312,6 +312,18 @@ async function _callGeminiAPI(b64, key, attempt) {
       err.kind = 'timeout';
       throw err;
     }
+    // fetch() itself never got a response: DNS failure, no connectivity,
+    // or something (ad-blocker / privacy extension / captive portal) blocked
+    // the request to googleapis.com before any HTTP status came back.
+    if (e.name === 'TypeError' && !e.status && !e.kind) {
+      if (attempt < 1) {
+        await new Promise(r => setTimeout(r, 800));
+        return _callGeminiAPI(b64, key, attempt + 1);
+      }
+      const err = new Error('เชื่อมต่อ Gemini ไม่ได้: ' + e.message);
+      err.kind = 'network';
+      throw err;
+    }
     throw e;
   }
 }
@@ -321,6 +333,7 @@ async function _callGeminiAPI(b64, key, attempt) {
 // message text (which has changed wording before and will again).
 function _geminiErrorToast(e) {
   if (e.kind === 'timeout') return e.message;
+  if (e.kind === 'network') return '⚠ เชื่อมต่อ Gemini ไม่ได้ — เช็คอินเทอร์เน็ต หรือปิด Ad-blocker/VPN แล้วลองใหม่';
   if (e.kind === 'parse') return '⚠ Gemini ตอบกลับไม่ถูกต้อง — ลองอีกครั้ง';
   if (e.status === 400 || e.status === 401 || e.status === 403) {
     return '⚠ Gemini API Key ไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน — ตั้งค่าที่แท็บ ⚙ (Admin)';
