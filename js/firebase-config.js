@@ -20,6 +20,7 @@ const disposalsRef = db.collection('disposals');   // Drug disposal records (2-p
 const dispensingRef = db.collection('dispensing'); // Patient dispensing records
 const usersRef     = db.collection('users');       // Staff accounts — synced across all devices
 const auditRef     = db.collection('auditLog');    // Audit trail — all actions logged here
+const settingsRef  = db.collection('settings');    // Shared app config (e.g. Gemini API key) — Admin-managed
 
 db.enablePersistence({ synchronizeTabs: true }).catch(err => {
   if (err.code !== 'failed-precondition' && err.code !== 'unimplemented') {

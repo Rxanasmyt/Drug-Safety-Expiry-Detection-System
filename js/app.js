@@ -1508,22 +1508,22 @@ function renderCfgTab() {
         </div>
         <div class="settings-section-label"><span>👤</span>บัญชีผู้ใช้งาน</div>
         ${userListHTML}
-      ` : ''}
 
-      <div class="settings-section-label"><span>🤖</span>AI Vision · อ่านฉลากยาอัตโนมัติ</div>
-      <div class="settings-row" style="align-items:flex-start;flex-direction:column;gap:6px">
-        <div style="display:flex;align-items:center;justify-content:space-between;width:100%">
-          <div class="settings-row-left">
-            <div class="settings-row-label">Gemini API Key</div>
-            <div class="settings-row-sub">ขอฟรีที่ aistudio.google.com/apikey · gemini-2.0-flash-lite</div>
+        <div class="settings-section-label"><span>🤖</span>AI Vision · อ่านฉลากยาอัตโนมัติ (Admin)</div>
+        <div class="settings-row" style="align-items:flex-start;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%">
+            <div class="settings-row-left">
+              <div class="settings-row-label">Gemini API Key</div>
+              <div class="settings-row-sub">ขอฟรีที่ aistudio.google.com/apikey · gemini-2.0-flash-lite</div>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:${s.geminiKey?'#2ee6a6':'#ff9f43'}">${s.geminiKey?'✓ พร้อมใช้':'ยังไม่ได้ตั้งค่า'}</div>
           </div>
-          <div style="font-size:11px;font-weight:700;color:${s.geminiKey?'#2ee6a6':'#ff9f43'}">${s.geminiKey?'✓ พร้อมใช้':'ยังไม่ได้ตั้งค่า'}</div>
+          <input id="geminiKeyInput" type="password" placeholder="AIza..." value="${s.geminiKey||''}"
+            style="width:100%;box-sizing:border-box;padding:10px 14px;border-radius:12px;background:var(--card);border:1.5px solid var(--line);color:var(--ink);font-size:12px;font-family:'JetBrains Mono',monospace"
+            autocomplete="off" spellcheck="false">
+          <div style="font-size:10.5px;color:var(--ink3);line-height:1.5">📷 ใช้ถ่ายรูปยาแล้วได้ชื่อยา/EXP/LOT ครบโดยอัตโนมัติ — ไม่ต้องกรอกเอง · บันทึกถาวรใน Firebase ผู้ใช้อื่นมองไม่เห็น</div>
         </div>
-        <input id="geminiKeyInput" type="password" placeholder="AIza..." value="${s.geminiKey||''}"
-          style="width:100%;box-sizing:border-box;padding:10px 14px;border-radius:12px;background:var(--card);border:1.5px solid var(--line);color:var(--ink);font-size:12px;font-family:'JetBrains Mono',monospace"
-          autocomplete="off" spellcheck="false">
-        <div style="font-size:10.5px;color:var(--ink3);line-height:1.5">📷 ใช้ถ่ายรูปยาแล้วได้ชื่อยา/EXP/LOT ครบโดยอัตโนมัติ — ไม่ต้องกรอกเอง</div>
-      </div>
+      ` : ''}
 
       <div class="settings-section-label"><span>📋</span>Audit Log (${S.auditLog.length} รายการ)</div>
       ${auditHTML}
@@ -2063,7 +2063,9 @@ function openPhotoCap() {
     return;
   }
   if (!S.settings.geminiKey && !localStorage.getItem('geminiKey')) {
-    showToast('ตั้งค่า Gemini API Key ก่อนใช้กล้อง AI (แท็บ ⚙ ตั้งค่า)', '#ff9f43', 3500);
+    showToast(S.user?.role === 'Admin'
+      ? 'ตั้งค่า Gemini API Key ก่อนใช้กล้อง AI (แท็บ ⚙ ตั้งค่า)'
+      : 'กล้อง AI ยังไม่พร้อมใช้งาน — แจ้ง Admin ให้ตั้งค่า Gemini API Key', '#ff9f43', 3500);
     return;
   }
   const overlay = document.createElement('div');
@@ -2366,7 +2368,12 @@ const HERO_BTN_DEFAULT_HTML = `<div class="hero-photo-icon-wrap"><svg width="30"
 async function handlePhotoScan(file) {
   if (!file) return;
   const hasGemini = !!(S.settings.geminiKey || localStorage.getItem('geminiKey'));
-  if (!hasGemini) { showToast('ตั้งค่า Gemini API Key ก่อน (แท็บ ⚙ ตั้งค่า)', '#ff9f43'); return; }
+  if (!hasGemini) {
+    showToast(S.user?.role === 'Admin'
+      ? 'ตั้งค่า Gemini API Key ก่อน (แท็บ ⚙ ตั้งค่า)'
+      : 'ฟีเจอร์นี้ยังไม่พร้อมใช้งาน — แจ้ง Admin ให้ตั้งค่า Gemini API Key', '#ff9f43');
+    return;
+  }
   const btn = document.getElementById('photoScanBtn');
   const previewUrl = URL.createObjectURL(file);
   if (btn) {
@@ -2659,7 +2666,7 @@ function bindCfgTab() {
   if (geminiInput) {
     geminiInput.addEventListener('change', () => {
       S.settings.geminiKey = geminiInput.value.trim();
-      try { localStorage.setItem('geminiKey', S.settings.geminiKey); } catch(e) {}
+      _saveGeminiKey(S.settings.geminiKey);
       saveSettings();
       updateTabBody();
     });
@@ -2843,6 +2850,32 @@ function initUsers() {
       if (S.screen === 'app' && S.tab === 'cfg') updateTabBody();
     }
   }, err => console.warn('Users sync:', err.code || err.message));
+}
+
+// ── SHARED APP SETTINGS (Admin-only, e.g. Gemini API key) ─────
+// Stored in a single Firestore doc so it persists permanently and syncs to
+// every device — not just the browser it was typed into.
+function _saveGeminiKey(key) {
+  try { localStorage.setItem('geminiKey', key); } catch(e) {} // instant, offline-safe fallback
+  if (typeof settingsRef === 'undefined') return;
+  settingsRef.doc('app').set({
+    geminiKey: key,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: S.user?.name || 'system',
+  }, { merge: true }).catch(e => console.warn('Settings Firestore write:', e));
+}
+
+function initAppSettings() {
+  if (typeof settingsRef === 'undefined') return;
+  settingsRef.doc('app').onSnapshot(doc => {
+    if (!doc.exists) return;
+    const data = doc.data();
+    if (typeof data.geminiKey === 'string') {
+      S.settings.geminiKey = data.geminiKey;
+      try { localStorage.setItem('geminiKey', data.geminiKey); } catch(e) {}
+      if (S.screen === 'app' && S.tab === 'cfg') updateTabBody();
+    }
+  }, err => console.warn('Settings sync:', err.code || err.message));
 }
 
 function bindSheetEvents() {
@@ -5118,6 +5151,7 @@ document.addEventListener('DOMContentLoaded', () => {
   try { initRecalls(); } catch(e) { console.warn('Recalls init:', e); }
   try { initUsers(); } catch(e) { console.warn('Users init:', e); }
   try { initAuditLog(); } catch(e) { console.warn('AuditLog init:', e); }
+  try { initAppSettings(); } catch(e) { console.warn('App settings init:', e); }
 
   // Periodic notify check every 30 minutes
   setInterval(() => { if (S.screen === 'app') checkAndNotify(); }, 30 * 60 * 1000);
