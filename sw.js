@@ -1,5 +1,5 @@
 /* PharmaCare Service Worker — offline shell + asset cache */
-const CACHE = 'pharmacare-v1';
+const CACHE = 'pharmacare-v2';
 const SHELL = [
   '/',
   '/index.html',
@@ -60,15 +60,18 @@ self.addEventListener('fetch', e => {
   // Firebase & Google APIs → network only
   if (url.hostname.includes('firebase') || url.hostname.includes('googleapis')) return;
 
+  // Network-first: this app ships fixes frequently, so a returning user must
+  // get the current index.html/app.js/styles.css whenever they have
+  // connectivity. Cache is only a fallback for genuinely offline use — the
+  // previous "cache-first" strategy (return cached || fresh) served a
+  // possibly months-old app.js forever, since the cache is never invalidated
+  // just because the server's files changed.
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fresh = fetch(e.request).then(res => {
-        if (res && res.status === 200 && res.type === 'basic') {
-          caches.open(CACHE).then(c => c.put(e.request, res.clone()));
-        }
-        return res;
-      }).catch(() => null);
-      return cached || fresh;
-    })
+    fetch(e.request).then(res => {
+      if (res && res.status === 200 && res.type === 'basic') {
+        caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });
