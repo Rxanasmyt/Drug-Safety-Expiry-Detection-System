@@ -285,11 +285,19 @@ async function _callGeminiAPI(b64, key, attempt) {
         await new Promise(r => setTimeout(r, 900));
         return _callGeminiAPI(b64, key, attempt + 1);
       }
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status; // reliable classifier — Google's message wording changes over time
+      throw err;
     }
     const resp = await res.json();
     const raw = (resp.candidates?.[0]?.content?.parts?.[0]?.text || '{}').trim();
-    const data = JSON.parse(raw);
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (parseErr) {
+      const err = new Error('Gemini returned malformed JSON: ' + raw.slice(0, 200));
+      err.kind = 'parse';
+      throw err;
+    }
     _saveDrugCache(data);
     return _mergeDrugCache(data);
   } catch(e) {
@@ -300,10 +308,25 @@ async function _callGeminiAPI(b64, key, attempt) {
         await new Promise(r => setTimeout(r, 800));
         return _callGeminiAPI(b64, key, attempt + 1);
       }
-      throw new Error('Gemini หมดเวลา — กรุณาลองอีกครั้ง (เครือข่ายช้า)');
+      const err = new Error('Gemini หมดเวลา — กรุณาลองอีกครั้ง (เครือข่ายช้า)');
+      err.kind = 'timeout';
+      throw err;
     }
     throw e;
   }
+}
+
+// Classify a thrown Gemini error into a short, actionable Thai toast.
+// Prefer the HTTP status code (reliable) over string-matching Google's
+// message text (which has changed wording before and will again).
+function _geminiErrorToast(e) {
+  if (e.kind === 'timeout') return e.message;
+  if (e.kind === 'parse') return '⚠ Gemini ตอบกลับไม่ถูกต้อง — ลองอีกครั้ง';
+  if (e.status === 400 || e.status === 401 || e.status === 403) {
+    return '⚠ Gemini API Key ไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน — ตั้งค่าที่แท็บ ⚙ (Admin)';
+  }
+  if (e.status === 429) return '⚠ Gemini ใช้งานเกินโควตาฟรี — ลองใหม่ภายหลัง';
+  return null; // caller falls back to its own generic message
 }
 
 // ── HELPERS ───────────────────────────────────────────
@@ -2043,8 +2066,7 @@ async function handleOCRFile(file) {
     }
   } catch(e) {
     console.warn('OCR error:', e);
-    const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
-    showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ อ่านไม่สำเร็จ — กรุณากรอกเอง', '#ff4d5e');
+    showToast(_geminiErrorToast(e) || '⚠ อ่านไม่สำเร็จ — กรุณากรอกเอง', '#ff4d5e');
   } finally {
     if (btn) { btn.innerHTML = '🤖 ถ่ายรูปกล่องยา — AI อ่านอัตโนมัติ'; btn.disabled = false; }
   }
@@ -2325,8 +2347,7 @@ async function _processDrugPhoto(input, fromCam = false) {
     });
   } catch(e) {
     console.warn('Photo scan error:', e);
-    const isKey = /API_KEY|400|403|invalid/i.test(e.message || '');
-    showToast(isKey ? '⚠ Gemini API Key ไม่ถูกต้อง — ตั้งค่าที่แท็บ ⚙' : '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
+    showToast(_geminiErrorToast(e) || '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
   }
 }
 
@@ -2356,7 +2377,7 @@ async function handleNamePhoto(file) {
     if (!S.scanResult?.needsExpiry) _startAutoSave();
   } catch(e) {
     console.warn('Name photo error:', e);
-    showToast('⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
+    showToast(_geminiErrorToast(e) || '⚠ AI อ่านไม่สำเร็จ — ลองอีกครั้ง', '#ff4d5e');
   } finally {
     if (btn) { btn.disabled = false; btn.style.opacity = ''; }
   }
